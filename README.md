@@ -1,0 +1,294 @@
+# LCMish
+
+**Transparent linear-combination modelling for magnetic resonance spectroscopy.**
+
+LCMish is a Python framework for fitting MR spectra with basis spectra, smooth baselines and a modest collection of nonlinear nuisance parameters. It began life as an internal project called PyLCModel and keeps that project's version lineage: the first public-facing release is therefore **0.2.1**, because pretending the previous versions never happened would be tidy but untrue.
+
+The name is deliberate. LCMish performs **LCM-ish** fitting. It is inspired by the general linear-combination modelling approach used by LCModel, but it is **not LCModel**, not an official port, and not yet a drop-in numerical replacement. If you require LCModel, the safest approach remains to use LCModel. This may sound obvious, but software documentation has been built on less.
+
+> **Research-software status:** alpha. Inspectable, testable and useful for method development; not an invitation to switch off one's critical faculties.
+
+## Why does this exist?
+
+LCMish grew out of a fairly simple frustration: spectroscopy fitting is much easier to reason about when the numerical machinery can be inspected, modified, plotted, unit-tested and occasionally accused by name.
+
+The immediate emphasis has been **³¹P MRS**, including PCr, Pi, ATP and NAD-region fitting, although the core fitter is nucleus-agnostic. The project aims to provide a transparent environment for developing and testing linear-combination models rather than to win an impersonation contest with established spectroscopy software.
+
+## What 0.2.1 does
+
+- fits the **real part of a zero-filled spectrum** using supplied basis spectra;
+- uses separable / variable-projection-style optimisation, with linear amplitudes and baseline coefficients solved inside a nonlinear optimisation;
+- supports global frequency shift, zero-order phase, first-order phase, Lorentzian broadening and Gaussian broadening;
+- supports optional metabolite **groups** with shared shift and linewidth terms;
+- supports non-negative metabolite amplitudes;
+- uses a cubic B-spline baseline with second-difference regularisation;
+- reads **NIfTI-MRS** `.nii` / `.nii.gz` as the preferred vendor-neutral spectroscopy input;
+- reads common LCModel-style `.RAW` files;
+- reads common LCModel-style `.BASIS` files, including per-metabolite blocks and `ISHIFT`;
+- provides multistart fitting;
+- reports conditional amplitude standard errors and deliberately labels the corresponding percentages **CRLB-like**;
+- provides ³¹P-oriented starting configurations;
+- writes CSV, text-table, checkpoint, fit-figure and **single-page PDF summary** outputs;
+- offers optional Siemens Twix access through `pymapvbvd`;
+- works with modern NumPy, including NumPy versions in which `np.trapz` has gone to live on a farm in the countryside.
+
+## What it does *not* yet do
+
+LCMish 0.2.1 is not numerically equivalent to LCModel. Important behaviour still requiring implementation and/or systematic validation includes, among other things:
+
+- LCModel's full prior model and concentration-ratio constraints;
+- automatic regularisation selection equivalent to LCModel;
+- the full LCModel lineshape model;
+- exact LCModel `%SD` / CRLB calculations;
+- macromolecule and lipid simulation controls;
+- water scaling and absolute concentration calibration;
+- eddy-current correction;
+- complete `CONTROL`-file compatibility;
+- byte-for-byte reproduction of LCModel output.
+
+Accordingly, the uncertainty figures currently produced by LCMish are **conditional, CRLB-like estimates**, not LCModel `%SD`. Calling them the latter would make them no more equivalent, but would make the documentation worse.
+
+## Installation
+
+After cloning the repository:
+
+```bash
+cd lcmish
+python -m pip install -e ".[test]"
+python -m pytest
+```
+
+For NIfTI-MRS support:
+
+```bash
+python -m pip install -e ".[nifti]"
+```
+
+For optional Siemens Twix access:
+
+```bash
+python -m pip install -e ".[twix]"
+```
+
+Or, for both optional readers:
+
+```bash
+python -m pip install -e ".[all]"
+```
+
+Eventually, once a PyPI release exists:
+
+```bash
+pip install lcmish
+```
+
+Do not be alarmed if that last command fails before the package has actually been uploaded. Python remains disappointingly literal about these things.
+
+## Input formats
+
+### NIfTI-MRS — preferred
+
+[NIfTI-MRS](https://github.com/wtclarke/mrs_nifti_standard) is the preferred vendor-neutral input format. That is not because `.nii.gz` is inherently more charming than every scanner format; it is because scanner raw formats change, while an analysis interchange standard gives the fitter a stable contract.
+
+LCMish reads the complex time-domain signal, dwell time, spectrometer frequency, resonant nucleus, spatial affine and NIfTI-MRS JSON metadata. If `SpecFreqChemShift` is present it is used as the spectral-centre reference; it can always be overridden explicitly.
+
+A normal preprocessed SVS file is deliberately simple:
+
+```python
+import lcmish
+
+data = lcmish.read("subject.nii.gz")
+print(data.metadata["nucleus"])
+print(data.dwell_time_s, data.transmitter_mhz)
+```
+
+NIfTI-MRS can also contain MRSI voxels, uncombined coils, dynamics, edit states and other higher dimensions. LCMish **does not silently average or coil-combine these**. If more than one FID is present, select it explicitly:
+
+```python
+data = lcmish.read(
+    "mrsi_or_dynamic.nii.gz",
+    index=(x, y, z, dim5, dim6),
+)
+```
+
+The index follows the stored non-spectral dimensions: `x, y, z`, then dimensions 5–7 if present. In ordinary workflows it is usually better to perform coil combination, alignment, averaging and edit-state arithmetic in a preprocessing package and give LCMish the resulting single-FID NIfTI-MRS file. File I/O is not the ideal place to smuggle in scientific decisions.
+
+LCMish uses **NiBabel** for NIfTI I/O. For strict format validation and manipulation of higher dimensions, the dedicated [`nifti-mrs`](https://pypi.org/project/nifti-mrs/) tools remain an excellent companion.
+
+### LCModel-style RAW
+
+`.RAW` remains supported for compatibility and validation work. Because RAW files do not always provide enough acquisition metadata consistently, dwell time and transmitter frequency are explicit:
+
+```python
+data = lcmish.read(
+    "subject.RAW",
+    dwell_time_s=1 / 3000,
+    transmitter_mhz=51.7,
+    reference_ppm=0.0,
+)
+```
+
+### Scanner raw data
+
+Siemens Twix access remains available separately through `read_twix()` and `pymapvbvd`. It returns the raw complex array without guessing which dimensions are voxels, coils or averages. This is intentional.
+
+LCMish does **not** currently parse GE P-files (`.7`) or GE ScanArchive directly. GE raw formats have changed across software generations and ScanArchive is increasingly relevant; maintaining another scanner-raw parser is not presently the hill on which this fitter intends to perish. Converting/reconstructing to NIfTI-MRS upstream is the preferred route. The same philosophy applies to other vendor-specific raw formats.
+
+## A small example
+
+```python
+import lcmish
+from lcmish import read_basis, fit_spectrum, p31_brain_config
+
+data = lcmish.read("subject.nii.gz")
+
+basis = read_basis(
+    "my31p.BASIS",
+    transmitter_mhz=data.transmitter_mhz,
+    reference_ppm=data.reference_ppm,
+)
+
+result = fit_spectrum(
+    data,
+    basis,
+    p31_brain_config((-20.0, 10.0)),
+)
+
+result.save_csv("fit.csv")
+result.save_pdf("fit.pdf", title="LCMish 31P fit")
+result.plot("fit.png")
+print(result.nonlinear)
+print(result.summary_rows())
+```
+
+### The one-page summary
+
+LCMish can write a single-page PDF summary in the grand spectroscopy tradition of putting the spectrum, fit, residuals and enough numbers to ruin a perfectly good sheet of A4 on the same page:
+
+```python
+result.save_pdf("fit.pdf", title="LCMish 31P fit")
+```
+
+The report contains the observed spectrum, fitted model, baseline, residual, component amplitudes, conditional standard errors, CRLB-like percentages, nonlinear fit parameters and basic fit diagnostics. The layout is intentionally familiar to LCModel users, but every page is labelled **LCMish** and explicitly states that it is not LCModel output. Familiarity is useful; accidental software impersonation less so.
+
+The command-line interface writes this PDF automatically as `<output>.pdf`, alongside the machine-readable outputs. PostScript is not required. It has served spectroscopy honourably and may now enjoy retirement.
+
+A rendered synthetic example is included at [`examples/LCMish_synthetic_fit_summary.pdf`](examples/LCMish_synthetic_fit_summary.pdf).
+
+The command-line equivalent for NIfTI-MRS is:
+
+```bash
+lcmish subject.nii.gz my31p.BASIS \
+  --ppm-min -20 --ppm-max 10 \
+  --out subject_fit
+```
+
+For LCModel-style RAW input, add `--dwell`, `--f0` and, where appropriate, `--ref-ppm`. For a multi-FID NIfTI-MRS file, `--index x y z ...` makes the selection explicit.
+
+## ³¹P grouped fitting
+
+For ³¹P work, `p31_brain_grouped_config()` provides a starting model with shared nonlinear terms for sensible component groups where the supplied basis names permit it. It is a starting configuration, not a revealed truth. Inspect it, change it and report what you used.
+
+```python
+from lcmish import p31_brain_grouped_config
+
+config = p31_brain_grouped_config((-20.0, 10.0))
+```
+
+For difficult spectra, multistart fitting is available:
+
+```python
+from lcmish import fit_spectrum_multistart
+
+starts = (
+    {},
+    {"initial_phase0_deg": -8.0, "initial_phase1_deg_per_ppm": -3.0},
+    {"initial_phase0_deg":  8.0, "initial_phase1_deg_per_ppm":  3.0},
+    {"initial_lorentzian_hz": 1.0, "initial_gaussian_hz": 12.0},
+)
+
+audit = fit_spectrum_multistart(data, basis, config, starts=starts)
+result = audit.best
+```
+
+The best fit is the one with the smallest optimisation cost. It is not necessarily the one your eyes most wanted to win.
+
+## Basis sets: an important boring bit
+
+LCMish can **read** LCModel-style `.BASIS` files. That does not mean every basis file may be redistributed.
+
+This repository therefore does **not** ship the private/internal ³¹P basis sets used during development. Before committing any basis set, establish its provenance and redistribution terms. The BSD licence for LCMish covers the LCMish code; it does not re-license third-party spectra by osmosis.
+
+Synthetic example basis data used in the tests are generated by the tests themselves and contain no external basis spectra.
+
+See [`THIRD_PARTY.md`](THIRD_PARTY.md) for the slightly more grown-up version of this paragraph.
+
+## Relationship to LCModel
+
+LCModel was developed by **Stephen Provencher**. Its source code has been released separately under a BSD 3-Clause licence. LCMish is an independent Python project for exploring and validating linear-combination MRS fitting. It does not include the LCModel source or executable and is not endorsed by the LCModel author or maintainers.
+
+Compatibility with LCModel-style file formats is intended to make validation easier, particularly direct comparison of the same data and basis information across fitting implementations.
+
+A major development goal is a proper regression suite comparing LCMish with established fitting tools on synthetic and real spectra. A reassuring plot is lovely; numerical agreement is better.
+
+## Was this vibe-coded?
+
+**Partly, yes.** The early versions were built through rather intensive human–AI pair programming between **Frank Riemer** and **OpenAI's ChatGPT**.
+
+This is disclosed because pretending otherwise would be daft. ChatGPT contributed code generation, refactoring, documentation and test scaffolding. The scientific direction, decisions about what the model should mean, validation, review and responsibility for releasing the software remain human.
+
+We are therefore comfortable saying that LCMish was **AI-assisted** and, in the colloquial sense, occasionally vibe-coded. We are *not* proposing vibe as a statistical estimator. Pull requests justified primarily by “it looked about right on my screen” may be asked to bring a test.
+
+See [`AUTHORS.md`](AUTHORS.md) for the formal credit statement.
+
+## Validation philosophy
+
+The order of operations is:
+
+1. make the model inspectable;
+2. test it on known synthetic cases;
+3. compare fitted amplitudes, shifts, phases, linewidths, baselines and residuals against established software;
+4. quantify disagreement rather than negotiating with it;
+5. only then use new behaviour for biological inference.
+
+For ³¹P work, particularly NAD-region fitting, validation should include sensitivity to basis composition, baseline placement, linewidth, phase, spectral registration and metabolite grouping. Separating NAD⁺ and NADH because the optimiser returned two numbers is not, on its own, evidence that the experiment contained enough information to distinguish them.
+
+## NumPy compatibility
+
+Internal PyLCModel 0.2.1-era analysis scripts needed a temporary compatibility shim because newer NumPy versions removed `np.trapz`. LCMish fixes this in the package itself: numerical integration uses `numpy.trapezoid` where available and falls back to `numpy.trapz` for older supported versions.
+
+In other words, user scripts no longer need to teach NumPy about its own former functions. This feels healthier for everyone involved.
+
+## Reproducibility
+
+If you use LCMish in a paper, please report at minimum:
+
+- LCMish version;
+- acquisition nucleus and field strength;
+- basis-set provenance/version;
+- fit ppm range;
+- metabolite grouping;
+- bounds on shifts, phase and linewidth;
+- baseline spacing/regularisation;
+- amplitude constraints;
+- multistart strategy, if used;
+- QC and exclusion criteria;
+- whether reported uncertainty is the current conditional CRLB-like estimate.
+
+“LCMish was used with default settings” will eventually become less informative as defaults improve, which is the traditional reward for maintaining software.
+
+## Licence
+
+LCMish is released under the **BSD 3-Clause License**. See [`LICENSE`](LICENSE).
+
+That licence applies to LCMish code. Third-party basis sets, scanner data, example data obtained elsewhere and external software retain their own licences and terms. See [`THIRD_PARTY.md`](THIRD_PARTY.md).
+
+## Contributing
+
+Contributions, comparisons, bug reports and politely devastating validation results are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+The preferred bug report contains enough information to reproduce the bug. “NAD looks odd” is scientifically interesting but operationally broad.
+
+---
+
+**LCMish 0.2.1** — linear-combination modelling, with the confidence level implied by the suffix.
