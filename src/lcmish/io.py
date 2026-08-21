@@ -9,6 +9,7 @@ import numpy as np
 from .models import BasisSet, SpectralData
 
 _FLOAT_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?")
+_LCMODEL_CENTER_PPM = 4.65
 
 
 def _numbers(text: str) -> list[float]:
@@ -20,6 +21,11 @@ def _parse_assignments(block: str) -> dict[str, str]:
     for key, raw in re.findall(r"(?im)^\s*([A-Za-z][A-Za-z0-9_]*)\s*=\s*([^,\n/]+)", block):
         out[key.upper()] = raw.strip().strip("'\"")
     return out
+
+
+def _fortran_nint(value: float) -> int:
+    """Return Fortran NINT semantics (nearest integer, ties away from zero)."""
+    return int(np.copysign(np.floor(abs(value) + 0.5), value))
 
 
 def read_raw(
@@ -58,15 +64,13 @@ def read_basis(
     transmitter_mhz: float | None = None,
     reference_ppm: float = 0.0,
 ) -> BasisSet:
-    """Read common LCModel `.BASIS` files into time-domain component signals.
+    """Read an LCModel `.BASIS` file using LCModel ``MYBASI`` conventions.
 
-    LCModel basis files encountered in practice contain namelist blocks followed
-    by real/imaginary spectral pairs. LCMish parses each `$BASIS` component,
-    applies integer `ISHIFT` by rolling the stored spectral vector, and converts
-    the stored spectrum to a complex FID with an inverse FFT.
-
-    The LCModel format has historical variants; unusual files should be checked
-    explicitly by plotting reconstructed component spectra before fitting.
+    The stored arrays are zero-filled, non-rearranged frequency-domain spectra.
+    Each component is scaled by ``TRAMP/(VOLUME*CONC)``, shifted by ``ISHIFT``
+    plus LCModel's carrier-grid correction from 4.65 ppm, inverse transformed
+    with unitary normalization, and reduced to its unfilled time-domain half.
+    ``reference_ppm`` is the carrier chemical shift of the data to be fitted.
     """
     path = Path(path)
     text = path.read_text(errors="replace")
@@ -76,14 +80,24 @@ def read_basis(
     for match in global_blocks:
         global_meta.update(_parse_assignments(match.group(1)))
 
-    dwell = None
-    for key in ("BADELT", "DELTAT"):
-        if key in global_meta:
-            try:
-                dwell = float(global_meta[key].replace("D", "E"))
-                break
-            except ValueError:
-                pass
+    try:
+        dwell = float(global_meta["BADELT"].replace("D", "E"))
+        ndatab = int(float(global_meta["NDATAB"].replace("D", "E")))
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"BASIS1/BADELT and BASIS1/NDATAB are required in {path}") from exc
+    if dwell <= 0 or ndatab <= 0 or ndatab % 2:
+        raise ValueError("BASIS1/BADELT must be positive and NDATAB must be positive and even")
+
+    basis_f0 = None
+    if "HZPPPM" in global_meta:
+        try:
+            basis_f0 = float(global_meta["HZPPPM"].replace("D", "E"))
+        except ValueError:
+            pass
+    if basis_f0 is None:
+        basis_f0 = transmitter_mhz
+    if basis_f0 is None and not np.isclose(reference_ppm, _LCMODEL_CENTER_PPM):
+        raise ValueError("HZPPPM or transmitter_mhz is required for LCModel carrier correction")
 
     component_matches = list(re.finditer(r"(?is)\$BASIS\b(.*?)\$END", text))
     if not component_matches:
@@ -99,33 +113,70 @@ def read_basis(
         data_start = match.end()
         data_end = component_matches[i + 1].start() if i + 1 < len(component_matches) else len(text)
         values = _numbers(text[data_start:data_end])
-        if len(values) < 8:
-            continue
-        if len(values) % 2:
-            values = values[:-1]
+        needed = 2 * ndatab
+        if len(values) < needed:
+            raise ValueError(
+                f"Basis component {name!r} has {len(values) // 2} complex points; "
+                f"BASIS1/NDATAB declares {ndatab}"
+            )
+        values = values[:needed]
         spec = np.asarray(values[0::2]) + 1j * np.asarray(values[1::2])
-        if "ISHIFT" in attrs:
-            try:
-                spec = np.roll(spec, int(float(attrs["ISHIFT"])))
-            except ValueError:
-                pass
-        fid = np.fft.ifft(np.fft.ifftshift(spec))
+
+        try:
+            conc = float(attrs.get("CONC", "1").replace("D", "E"))
+            tramp = float(attrs.get("TRAMP", "1").replace("D", "E"))
+            volume = float(attrs.get("VOLUME", "1").replace("D", "E"))
+        except ValueError as exc:
+            raise ValueError(f"Invalid CONC, TRAMP, or VOLUME for {name!r}") from exc
+        if min(conc, tramp, volume) <= 0:
+            raise ValueError(f"CONC, TRAMP, and VOLUME must be positive for {name!r}")
+        spec *= tramp / (volume * conc)
+
+        try:
+            ishift = int(float(attrs.get("ISHIFT", "0").replace("D", "E")))
+        except ValueError as exc:
+            raise ValueError(f"Invalid ISHIFT for {name!r}") from exc
+        reference_shift = 0
+        if basis_f0 is not None:
+            ppm_increment = 1.0 / (dwell * ndatab * basis_f0)
+            reference_shift = _fortran_nint(
+                (_LCMODEL_CENTER_PPM - float(reference_ppm)) / ppm_increment
+            )
+        total_shift = ishift + reference_shift
+        if total_shift:
+            # LCModel: BASISF(J)=stored(ICYCLE(J+total_shift,NDATAB)).
+            spec = np.roll(spec, -total_shift)
+
+        fid_zf = np.fft.ifft(spec) * np.sqrt(ndatab)
+        fid = fid_zf[: ndatab // 2].copy()
         names.append(name.strip())
         fids.append(fid)
-        component_meta.append(attrs)
+        component_meta.append(
+            {
+                **attrs,
+                "REFERENCE_SHIFT": str(reference_shift),
+                "TOTAL_SHIFT": str(total_shift),
+            }
+        )
 
     if not fids:
         raise ValueError(f"No basis component numeric data found in {path}")
 
-    n = min(len(x) for x in fids)
-    arr = np.asarray([x[:n] for x in fids], dtype=np.complex128)
+    arr = np.asarray(fids, dtype=np.complex128)
     return BasisSet(
         names=names,
         fids=arr,
         dwell_time_s=dwell,
-        transmitter_mhz=transmitter_mhz,
+        transmitter_mhz=transmitter_mhz if transmitter_mhz is not None else basis_f0,
         reference_ppm=reference_ppm,
-        metadata={"source": str(path), "header": global_meta, "components": component_meta},
+        metadata={
+            "source": str(path),
+            "header": global_meta,
+            "components": component_meta,
+            "lcmodel_basis": True,
+            "stored_ndatab": ndatab,
+            "basis_hzpppm": basis_f0,
+        },
     )
 
 
