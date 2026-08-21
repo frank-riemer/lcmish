@@ -25,6 +25,104 @@ def _resample_or_pad_fid(fid: np.ndarray, n: int) -> np.ndarray:
     return out
 
 
+def _fortran_nint(value: float) -> int:
+    return int(np.copysign(np.floor(abs(value) + 0.5), value))
+
+
+def _resize_unrearranged_spectrum(spec: np.ndarray, n: int) -> np.ndarray:
+    """Truncate/zero-fill the two halves of an unrearranged FFT like MYBASI."""
+    source = np.asarray(spec, dtype=np.complex128).reshape(-1)
+    out = np.zeros(int(n), dtype=np.complex128)
+    nhalf = min(source.size, out.size) // 2
+    out[:nhalf] = source[:nhalf]
+    out[-nhalf:] = source[-nhalf:]
+    return out
+
+
+def _match_basis_time_grid(
+    basis: BasisSet, data: SpectralData, model_npoints: int
+) -> np.ndarray:
+    """Return model FIDs on the data grid, following LCModel where possible.
+
+    LCModel constructs its basis functions over ``NDATA = 2*NUNFIL``, not
+    merely over the acquired ``NUNFIL`` samples.  This matters when a long,
+    narrow-band basis retains signal after the acquired data have ended.
+    Generic basis inputs keep their historical acquired-duration semantics
+    and are zero-filled after ``data.npoints``.
+    """
+    model_npoints = int(model_npoints)
+    if model_npoints < data.npoints:
+        raise ValueError("model_npoints cannot be shorter than the acquired data")
+    if basis.dwell_time_s is None:
+        return np.asarray(
+            [
+                _resample_or_pad_fid(
+                    _resample_or_pad_fid(fid, data.npoints), model_npoints
+                )
+                for fid in basis.fids
+            ]
+        )
+
+    basis_dt = float(basis.dwell_time_s)
+    if bool(basis.metadata.get("lcmodel_basis")):
+        # Recreate the zero-filled frequency array read by MYBASI, then perform
+        # its bandwidth conversion by preserving the two unrearranged FFT halves.
+        ndatab = int(basis.metadata.get("stored_ndatab", 2 * basis.npoints))
+        basis_f0 = basis.metadata.get("basis_hzpppm") or basis.transmitter_mhz
+        basis_f0 = float(basis_f0) if basis_f0 is not None else data.transmitter_mhz
+        rndata_freq = (
+            ndatab * basis_dt * basis_f0
+            / (float(data.dwell_time_s) * float(data.transmitter_mhz))
+        )
+        ndata_freq = 2 * _fortran_nint(0.5 * rndata_freq)
+        # LCModel 6.3 uses BWTOLR=.001 by default to avoid an immaterial
+        # bandwidth conversion when the requested and internal grids agree.
+        bwtolr = float(basis.metadata.get("bwtolr", 0.001))
+        if abs(1.0 - rndata_freq / model_npoints) <= bwtolr:
+            ndata_freq = model_npoints
+        if ndata_freq <= 0:
+            raise ValueError("LCModel basis/data grid conversion produced no samples")
+        rows = []
+        for fid in basis.fids:
+            fid_zf = np.zeros(ndatab, dtype=np.complex128)
+            fid_zf[: min(fid.size, ndatab)] = fid[:ndatab]
+            stored_grid = np.fft.fft(fid_zf) / np.sqrt(ndatab)
+            data_bw_grid = _resize_unrearranged_spectrum(stored_grid, ndata_freq)
+            converted = np.fft.ifft(data_bw_grid) * np.sqrt(ndata_freq)
+            rows.append(_resample_or_pad_fid(converted, model_npoints))
+        out = np.asarray(rows)
+    elif np.isclose(basis_dt, data.dwell_time_s, rtol=1e-7, atol=1e-12):
+        out = np.asarray(
+            [
+                _resample_or_pad_fid(
+                    _resample_or_pad_fid(fid, data.npoints), model_npoints
+                )
+                for fid in basis.fids
+            ]
+        )
+    else:
+        # Generic non-LCModel basis: interpolate its complex FID in physical time.
+        t_basis = np.arange(basis.npoints, dtype=float) * basis_dt
+        t_data = np.arange(data.npoints, dtype=float) * data.dwell_time_s
+        rows = []
+        for fid in basis.fids:
+            rows.append(
+                np.interp(t_data, t_basis, fid.real, left=0.0, right=0.0)
+                + 1j * np.interp(t_data, t_basis, fid.imag, left=0.0, right=0.0)
+            )
+        out = np.asarray(
+            [_resample_or_pad_fid(fid, model_npoints) for fid in rows]
+        )
+
+    reference_delta_hz = (
+        float(data.reference_ppm) - float(basis.reference_ppm)
+    ) * data.transmitter_mhz
+    if not np.isclose(reference_delta_hz, 0.0, atol=1e-12):
+        t = np.arange(model_npoints, dtype=float) * data.dwell_time_s
+        out *= np.exp(1j * 2.0 * np.pi * reference_delta_hz * t)[None, :]
+    return out
+
+
 def _bspline_matrix(x: np.ndarray, n_basis: int, degree: int = 3) -> np.ndarray:
     x = np.asarray(x, dtype=float)
     if n_basis <= degree:
@@ -113,14 +211,14 @@ def _components_for_params(
     ppm: np.ndarray,
     group_by_name: dict[str, GroupConfig],
 ) -> np.ndarray:
-    t = np.arange(data.npoints, dtype=float) * data.dwell_time_s
+    t = np.arange(nfft, dtype=float) * data.dwell_time_s
     phase0 = np.deg2rad(params["phase0_deg"])
     phase1 = np.deg2rad(params["phase1_deg_per_ppm"])
     pivot = data.reference_ppm
     phase = np.exp(1j * (phase0 + phase1 * (ppm - pivot)))
+    matched_fids = _match_basis_time_grid(basis, data, nfft)
     out = []
-    for name, source in zip(basis.names, basis.fids):
-        fid = _resample_or_pad_fid(source, data.npoints)
+    for name, fid in zip(basis.names, matched_fids):
         shift_ppm = params["global_shift_ppm"]
         lor_hz = params["lorentzian_hz"]
         group = group_by_name.get(name)
