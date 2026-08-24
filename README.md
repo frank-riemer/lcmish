@@ -60,7 +60,23 @@ Install the tested v0.2.2 wheel directly from the GitHub release:
 python -m pip install https://github.com/frank-riemer/lcmish/releases/download/v0.2.2/lcmish-0.2.2-py3-none-any.whl
 ```
 
-Optional NIfTI-MRS and Siemens Twix dependencies can be requested from the same wheel:
+### Installation for NAD+/NADH redox work
+
+The tagged v0.2.2 wheel **does not include the experimental redox module**.
+The v0.3.0.dev0 pre-release wheel is required for `fit_p31_redox()`,
+`prepare_p31_csi_redox()` and `fit_p31_csi_redox()`:
+
+```bash
+python -m pip install https://github.com/frank-riemer/lcmish/releases/download/v0.3.0.dev0/lcmish-0.3.0.dev0-py3-none-any.whl
+```
+
+This is a development pre-release intended for the NAD-region and masked 2-D
+31P-CSI work described below. It should not be presented as a validated general
+replacement for the stable v0.2.2 workflow or for established spectroscopy
+software.
+
+Optional NIfTI-MRS and Siemens Twix dependencies for the stable v0.2.2 release
+can be requested from its wheel:
 
 ```bash
 python -m pip install "lcmish[nifti] @ https://github.com/frank-riemer/lcmish/releases/download/v0.2.2/lcmish-0.2.2-py3-none-any.whl"

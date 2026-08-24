@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0.dev0 — development
+## 0.3.0.dev0 — 2026-08-24 pre-release
 
 - Added an explicitly experimental, literature-constrained local 31P NAD-region
   fitter for NAD+, NADH and neighbouring alpha-ATP.
