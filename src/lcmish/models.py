@@ -42,6 +42,64 @@ class SpectralData:
         # Positive frequency offsets appear at lower ppm in the conventional MRS axis.
         return self.reference_ppm - freq_hz / self.transmitter_mhz
 
+    def spectrum(self, nfft: int | None = None) -> np.ndarray:
+        """Return the complex, FFT-shifted spectrum."""
+        nfft = int(nfft or self.npoints)
+        return np.fft.fftshift(np.fft.fft(self.fid, n=nfft))
+
+
+@dataclass
+class CSIData:
+    """A two-dimensional grid of complex time-domain spectra.
+
+    ``fids`` must have shape ``(row, column, time)``. Anatomical orientation
+    and voxel selection remain acquisition- and study-specific; callers must
+    provide an explicit mask before using the redox workflow.
+    """
+
+    fids: np.ndarray
+    dwell_time_s: float
+    transmitter_mhz: float
+    reference_ppm: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.fids = np.asarray(self.fids, dtype=np.complex128)
+        if self.fids.ndim != 3 or self.fids.shape[-1] < 8:
+            raise ValueError("CSIData.fids must have shape (row, column, time>=8)")
+        if self.dwell_time_s <= 0:
+            raise ValueError("dwell_time_s must be positive")
+        if self.transmitter_mhz <= 0:
+            raise ValueError("transmitter_mhz must be positive")
+
+    @property
+    def spatial_shape(self) -> tuple[int, int]:
+        return int(self.fids.shape[0]), int(self.fids.shape[1])
+
+    @property
+    def npoints(self) -> int:
+        return int(self.fids.shape[-1])
+
+    def voxel(self, row: int, column: int) -> SpectralData:
+        metadata = dict(self.metadata)
+        metadata["voxel_index"] = [int(row), int(column)]
+        return SpectralData(
+            self.fids[row, column],
+            self.dwell_time_s,
+            self.transmitter_mhz,
+            self.reference_ppm,
+            metadata,
+        )
+
+    def ppm_axis(self, nfft: int | None = None) -> np.ndarray:
+        return self.voxel(0, 0).ppm_axis(nfft)
+
+    def spectra(self, nfft: int | None = None) -> np.ndarray:
+        nfft = int(nfft or self.npoints)
+        return np.fft.fftshift(
+            np.fft.fft(self.fids, n=nfft, axis=-1), axes=-1
+        )
+
 
 @dataclass
 class BasisSet:

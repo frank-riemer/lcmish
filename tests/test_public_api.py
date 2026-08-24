@@ -2,7 +2,7 @@ import lcmish
 
 
 def test_version_lineage():
-    assert lcmish.__version__ == "0.2.1"
+    assert lcmish.__version__ == "0.3.0.dev0"
 
 
 def test_expected_public_api():
@@ -17,5 +17,9 @@ def test_expected_public_api():
         "p31_brain_config",
         "p31_brain_grouped_config",
         "save_pdf_report",
+        "fit_p31_redox",
+        "redox_nuisance_sensitivity",
+        "prepare_p31_csi_redox",
+        "fit_p31_csi_redox",
     ):
         assert hasattr(lcmish, name)

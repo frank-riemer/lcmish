@@ -14,7 +14,7 @@ LCMish grew out of a fairly simple frustration: spectroscopy fitting is much eas
 
 The immediate emphasis has been **³¹P MRS**, including PCr, Pi, ATP and NAD-region fitting, although the core fitter is nucleus-agnostic. The project aims to provide a transparent environment for developing and testing linear-combination models rather than to win an impersonation contest with established spectroscopy software.
 
-## What 0.2.2 does
+## What the current development version does
 
 - fits the **real part of a zero-filled spectrum** using supplied basis spectra;
 - uses separable / variable-projection-style optimisation, with linear amplitudes and baseline coefficients solved inside a nonlinear optimisation;
@@ -30,11 +30,15 @@ The immediate emphasis has been **³¹P MRS**, including PCr, Pi, ATP and NAD-re
 - provides ³¹P-oriented starting configurations;
 - writes CSV, text-table, checkpoint, fit-figure and **single-page PDF summary** outputs;
 - offers optional Siemens Twix access through `pymapvbvd`;
+- provides an experimental local 31P NAD-region model for NAD+, NADH and
+  neighbouring alpha-ATP, including nucleotide-sugar sensitivity analysis;
+- provides an explicitly masked 2-D CSI convenience route with configurable
+  voxel and fit QC, PCr alignment, phase correction and coherent combination;
 - works with modern NumPy, including NumPy versions in which `np.trapz` has gone to live on a farm in the countryside.
 
 ## What it does *not* yet do
 
-LCMish 0.2.2 is not numerically equivalent to LCModel. Important behaviour still requiring implementation and/or systematic validation includes, among other things:
+LCMish, including the 0.3 development version, is not numerically equivalent to LCModel. Important behaviour still requiring implementation and/or systematic validation includes, among other things:
 
 - LCModel's full prior model and concentration-ratio constraints;
 - automatic regularisation selection equivalent to LCModel;
@@ -201,6 +205,52 @@ result = audit.best
 
 The best fit is the one with the smallest optimisation cost. It is not necessarily the one your eyes most wanted to win.
 
+## Experimental NAD-region fitting and masked 2-D CSI workflow
+
+The generic `fit_p31_redox()` function accepts a single preprocessed complex
+spectrum and fits a literature-constrained local model over the upfield
+alpha-ATP/NAD region. The result is labelled an **apparent** NAD+/NADH ratio.
+It is not returned as reportable when NADH is boundary-limited or the configured
+quality criteria fail.
+
+`fit_p31_csi_redox()` is a deliberately narrower convenience workflow. It
+expects reconstructed complex data with shape `(row, column, time)`, an explicit
+Boolean voxel mask, and study-specific QC thresholds. It calculates a robust
+PCr-SNR map, excludes masked voxels that fail the configured threshold, aligns
+and phases retained voxels individually, combines them coherently, and fits the
+local NAD model with an optional nucleotide-sugar sensitivity analysis.
+
+```python
+from lcmish import (
+    CSIData,
+    P31CSIRedoxQCConfig,
+    fit_p31_csi_redox,
+)
+
+csi = CSIData(fids, dwell_time_s, transmitter_mhz)
+qc = P31CSIRedoxQCConfig(
+    pcr_snr_min=10.0,
+    min_retained_voxels=3,
+    local_fit_correlation_min=0.85,
+    local_relative_residual_max=0.55,
+)
+result = fit_p31_csi_redox(csi, study_specific_mask, qc)
+print(result.qc_pass, result.qc_reasons)
+print(result.apparent_redox_ratio)
+```
+
+The route was designed for 2-D 31P-CSI after study-specific anatomical voxel
+selection. LCMish does not infer mask anatomy or scanner orientation. Use with
+single-voxel data, other field strengths, localization schemes, scanners or
+masking strategies may require adaptation and independent validation. See
+`examples/p31_2d_csi_redox.py` for a complete synthetic example. Cohort-level
+composites, participant bootstrap and treatment-label permutation tests remain
+study-analysis responsibilities rather than general LCMish functions. Passing
+the convenience workflow's QC does not by itself validate participant-level
+redox quantification; studies using group composites should prepare each scan
+with `prepare_p31_csi_redox()`, construct the prespecified composites in their
+analysis code, and then apply `fit_p31_redox()`.
+
 ## Basis sets: an important boring bit
 
 LCMish can **read** LCModel-style `.BASIS` files. That does not mean every basis file may be redistributed.
@@ -289,4 +339,4 @@ The preferred bug report contains enough information to reproduce the bug. “NA
 
 ---
 
-**LCMish 0.2.2** — linear-combination modelling, with the confidence level implied by the suffix.
+**LCMish 0.3.0.dev0** — development code; latest tagged release: **v0.2.2**.

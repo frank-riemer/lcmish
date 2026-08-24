@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0.dev0 — development
+
+- Added an explicitly experimental, literature-constrained local 31P NAD-region
+  fitter for NAD+, NADH and neighbouring alpha-ATP.
+- Added field-dependent NAD+ AB-quartet generation, phosphorus-count
+  normalization, conditional uncertainty, residual bootstrap and an optional
+  overlapping nucleotide-sugar sensitivity term.
+- Added an auditable convenience workflow for reconstructed complex 2-D CSI:
+  callers supply a study-specific voxel mask and explicit QC thresholds;
+  LCMish performs PCr-SNR filtering, voxel-wise PCr alignment, phase correction,
+  coherent combination and the local redox fit.
+- The reported quantity is deliberately named the *apparent* NAD+/NADH ratio,
+  and is withheld when the workflow or component-identifiability checks fail.
+- This workflow requires adaptation and independent validation for other
+  acquisitions, localization schemes, scanners or voxel-selection strategies.
+
 ## 0.2.2 — 2026-08-24
 
 - Corrected LCModel `.BASIS` parsing to read exactly `NDATAB` complex values per component.
