@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 message: "If you use LCMish in published work, please cite the software release and describe the fitting configuration used."
 title: "LCMish: transparent linear-combination modelling for magnetic resonance spectroscopy"
-version: 0.2.1
-date-released: 2026-08-20
+version: 0.2.2
+date-released: 2026-08-24
 authors:
   - family-names: Riemer
     given-names: Frank

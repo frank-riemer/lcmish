@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2 — 2026-08-24
+
+- Corrected LCModel `.BASIS` parsing to read exactly `NDATAB` complex values per component.
+- Added LCModel-compatible `TRAMP/(VOLUME*CONC)` scaling, `ISHIFT` direction, 4.65-ppm carrier correction and unitary inverse-FFT normalization.
+- Added LCModel-compatible basis/data bandwidth conversion, including field-strength compensation, `BWTOLR` handling and the internal `NDATA=2*NUNFIL` model duration.
+- Added regression tests for basis scaling, shifting, dwell-time conversion and preservation of narrow-band basis tails.
+- Validated the corrected behavior privately against a locally compiled LCModel reference and FSL-MRS on a matched 12-component synthetic 31P case.
+
 ## 0.2.1 — 2026-08-20
 
 First public-facing LCMish release, retaining the internal PyLCModel version lineage.

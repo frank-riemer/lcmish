@@ -24,7 +24,7 @@ The immediate emphasis has been **³¹P MRS**, including PCr, Pi, ATP and NAD-re
 - uses a cubic B-spline baseline with second-difference regularisation;
 - reads **NIfTI-MRS** `.nii` / `.nii.gz` as the preferred vendor-neutral spectroscopy input;
 - reads common LCModel-style `.RAW` files;
-- reads common LCModel-style `.BASIS` files, including per-metabolite blocks and `ISHIFT`;
+- reads LCModel-style `.BASIS` files with LCModel-compatible component scaling, shifting and basis/data grid matching;
 - provides multistart fitting;
 - reports conditional amplitude standard errors and deliberately labels the corresponding percentages **CRLB-like**;
 - provides ³¹P-oriented starting configurations;
