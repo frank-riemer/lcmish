@@ -180,6 +180,72 @@ def read_basis(
     )
 
 
+def write_basis(
+    path: str | Path,
+    basis: BasisSet,
+    *,
+    stored_ndatab: int | None = None,
+    idbasi: str = "LCMish generated basis",
+) -> Path:
+    """Write a :class:`BasisSet` in LCModel-style ``.BASIS`` form.
+
+    The writer is the inverse of :func:`read_basis`: arrays are stored on the
+    unrearranged frequency grid with unitary normalization.  ``ISHIFT``
+    cancels LCModel's 4.65-ppm carrier-grid correction so that the supplied
+    ``basis.reference_ppm`` is preserved.
+    """
+    path = Path(path)
+    if basis.dwell_time_s is None or basis.transmitter_mhz is None:
+        raise ValueError("Writing .BASIS requires dwell_time_s and transmitter_mhz")
+    ndatab = int(stored_ndatab or 2 * basis.npoints)
+    if ndatab <= 0 or ndatab % 2 or ndatab < basis.npoints:
+        raise ValueError("stored_ndatab must be even and at least basis.npoints")
+
+    dwell = float(basis.dwell_time_s)
+    f0 = float(basis.transmitter_mhz)
+    ppm_increment = 1.0 / (dwell * ndatab * f0)
+    reference_shift = _fortran_nint(
+        (_LCMODEL_CENTER_PPM - float(basis.reference_ppm)) / ppm_increment
+    )
+    ishift = -reference_shift
+
+    lines = [
+        " $SEQPAR",
+        f" HZPPPM= {f0:.10E},",
+        " SEQ='LCMish generated',",
+        " $END",
+        " $BASIS1",
+        f" IDBASI='{idbasi[:72]}',",
+        " FMTBAS='(6E16.8)',",
+        f" BADELT= {dwell:.10E},",
+        f" NDATAB= {ndatab},",
+        " $END",
+    ]
+    for name, fid in zip(basis.names, basis.fids):
+        fid_zf = np.zeros(ndatab, dtype=np.complex128)
+        fid_zf[: basis.npoints] = np.asarray(fid, dtype=np.complex128)
+        stored = np.fft.fft(fid_zf) / np.sqrt(ndatab)
+        lines.extend(
+            [
+                " $BASIS",
+                f" ID='{name[:20]}',",
+                f" METABO='{name[:6]}',",
+                " CONC= 1.0,",
+                " TRAMP= 1.0,",
+                " VOLUME= 1.0,",
+                f" ISHIFT= {ishift},",
+                " $END",
+            ]
+        )
+        values = np.empty(2 * ndatab, dtype=float)
+        values[0::2] = stored.real
+        values[1::2] = stored.imag
+        for start in range(0, values.size, 6):
+            lines.append(" ".join(f"{value:16.8E}" for value in values[start : start + 6]))
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
 def read_spectrum(
     path: str | Path,
     *,

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lcmish"
-version = "0.3.0.dev0"
+version = "0.3.0"
 description = "Transparent linear-combination modelling for MR spectroscopy"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,7 +31,9 @@ dependencies = [
 [project.optional-dependencies]
 nifti = ["nibabel>=5.2"]
 twix = ["pymapvbvd>=0.6"]
-all = ["nibabel>=5.2", "pymapvbvd>=0.6"]
+dicom = ["pydicom>=2.4"]
+siemens = ["pymapvbvd>=0.6", "pydicom>=2.4"]
+all = ["nibabel>=5.2", "pymapvbvd>=0.6", "pydicom>=2.4"]
 test = ["pytest>=7"]
 dev = ["pytest>=7", "build>=1.2"]
 
@@ -40,6 +42,9 @@ lcmish = "lcmish.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+lcmish = ["data/*.BASIS", "data/*.json"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

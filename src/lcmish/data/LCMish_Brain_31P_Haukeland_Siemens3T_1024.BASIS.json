@@ -1,0 +1,64 @@
+{
+  "basis_name": "LCMish open brain 31P basis",
+  "basis_version": "0.1.0",
+  "status": "experimental reference basis",
+  "preset": {
+    "name": "haukeland_siemens_3t_p31_csi_1024",
+    "manufacturer": "Siemens",
+    "field_strength_t": 3.0,
+    "institution": "Haukeland University Hospital",
+    "sequence_family": "proton-decoupled 31P CSI FID",
+    "acquired_points": 1024,
+    "dwell_time_s": 0.0005,
+    "transmitter_mhz": 49.891996,
+    "reference_ppm": 0.0
+  },
+  "spectral_width_hz": 2000.0,
+  "normalization": "unit area per molecule; NAD+ and NADH each represent two phosphorus nuclei",
+  "assumptions": [
+    "PCr referenced to 0 ppm",
+    "proton-decoupled pulse-acquire/CSI-FID signal model",
+    "zero intrinsic linewidth; fitting software supplies broadening",
+    "Pi shifts are starting values and remain physiologically pH-dependent"
+  ],
+  "references": [
+    {
+      "scope": "human brain chemical shifts",
+      "citation": "Ren et al., NMR Biomed. 2015;28:1455-1462",
+      "doi": "10.1002/nbm.3384"
+    },
+    {
+      "scope": "human brain ATP 31P-31P J couplings",
+      "citation": "Jung et al., Magn Reson Med. 1997;37:802-804",
+      "doi": "10.1002/mrm.1910370525"
+    },
+    {
+      "scope": "field-dependent NAD+ AB quartet and NADH model",
+      "citation": "Lu et al., Magn Reson Med. 2014;71:1959-1972",
+      "doi": "10.1002/mrm.24859"
+    }
+  ],
+  "not_included": [
+    "UDPG and other nucleotide-sugar multiplets",
+    "2,3-DPG blood nuisance resonances",
+    "broad membrane-phospholipid background"
+  ],
+  "basis_file": "LCMish_Brain_31P_Haukeland_Siemens3T_1024.BASIS",
+  "components": [
+    "PE",
+    "PC",
+    "Pi_ex",
+    "Pi",
+    "GPE",
+    "GPC",
+    "PCr",
+    "ATPg",
+    "ATPa",
+    "ATPb",
+    "NAD+",
+    "NADH"
+  ],
+  "acquired_points": 1024,
+  "model_points": 2048,
+  "lcmodel_stored_ndatab": 4096
+}

@@ -7,7 +7,15 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from lcmish import CSIData, P31CSIRedoxQCConfig, fit_p31_csi_redox
+from lcmish import (
+    CSIData,
+    P31CSIRedoxQCConfig,
+    fit_p31_csi_redox,
+    fit_spectrum_multistart,
+    load_p31_brain_basis,
+    p31_brain_grouped_config,
+    read_basis,
+)
 
 
 def run_workflow(
@@ -15,6 +23,7 @@ def run_workflow(
     mask_path: Path,
     output: Path,
     *,
+    basis_path: Path | None,
     pcr_snr_min: float,
     min_retained_voxels: int,
 ) -> None:
@@ -38,6 +47,29 @@ def run_workflow(
     result = fit_p31_csi_redox(csi, mask, qc)
     preparation = result.preparation
     primary = result.primary
+
+    basis = (
+        load_p31_brain_basis(reference_ppm=csi.reference_ppm)
+        if basis_path is None
+        else read_basis(basis_path, reference_ppm=csi.reference_ppm)
+    )
+    full_audit = fit_spectrum_multistart(
+        preparation.combined,
+        basis,
+        p31_brain_grouped_config((-20.0, 10.0)),
+        starts=(
+            {},
+            {"initial_phase0_deg": -8.0, "initial_phase1_deg_per_ppm": -3.0},
+            {"initial_phase0_deg": 8.0, "initial_phase1_deg_per_ppm": 3.0},
+        ),
+    )
+    full_fit = full_audit.best
+    full_fit.save_csv(output / "whole_spectrum_amplitudes.csv")
+    full_fit.save_components_csv(output / "whole_spectrum_components.csv")
+    full_figure = full_fit.plot(
+        output / "whole_spectrum_fit.png", title="Combined 31P whole-spectrum fit"
+    )
+    plt.close(full_figure)
 
     np.save(output / "pcr_snr.npy", preparation.pcr_snr)
     np.save(output / "retained_mask.npy", preparation.retained_mask)
@@ -79,6 +111,8 @@ def run_workflow(
 
     summary = {
         "source": csi.metadata,
+        "basis": basis.metadata.get("source", basis.metadata.get("bundled_filename")),
+        "bundled_basis_used": basis_path is None,
         "csi_shape": list(csi.spatial_shape),
         "spectral_points": csi.npoints,
         "dwell_time_s": csi.dwell_time_s,
@@ -93,6 +127,12 @@ def run_workflow(
         "fit_correlation": primary.fit_correlation,
         "relative_residual": primary.relative_residual,
         "apparent_nad_plus_over_nadh": result.apparent_redox_ratio,
+        "whole_spectrum_fit_success": full_fit.success,
+        "whole_spectrum_best_multistart_index": full_audit.best_index,
+        "whole_spectrum_candidate_costs": [trial.cost for trial in full_audit.trials],
+        "whole_spectrum_amplitudes": dict(
+            zip(full_fit.names, full_fit.amplitudes.tolist())
+        ),
         "absolute_concentration_calibrated": False,
         "orientation_was_inferred": False,
     }

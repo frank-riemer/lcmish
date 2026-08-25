@@ -31,7 +31,7 @@ def p31_brain_grouped_config(ppm_range: tuple[float, float] = (-20.0, 10.0)) -> 
     base = p31_brain_config(ppm_range)
     groups = (
         GroupConfig("ATP", ("ATPa", "ATPb", "ATPg"), (-0.12, 0.12), (0.0, 15.0)),
-        GroupConfig("NAD", ("NAD", "NADP", "NADH", "NAD+"), (-0.12, 0.12), (0.0, 15.0)),
+        GroupConfig("NAD", ("NAD", "NADP", "NADH", "NAD+", "NAD_plus"), (-0.12, 0.12), (0.0, 15.0)),
         GroupConfig("PME", ("PE", "PC"), (-0.12, 0.12), (0.0, 12.0)),
         GroupConfig("PDE", ("GPE", "GPC"), (-0.12, 0.12), (0.0, 12.0)),
     )

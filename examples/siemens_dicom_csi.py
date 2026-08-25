@@ -14,6 +14,11 @@ def main() -> None:
     parser.add_argument("--dicom", type=Path, required=True)
     parser.add_argument("--mask", type=Path, required=True, help="Verified 2-D boolean .npy mask")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--basis",
+        type=Path,
+        help="LCModel .BASIS file; defaults to the bundled Siemens 3 T starter basis",
+    )
     parser.add_argument("--rows", type=int, required=True)
     parser.add_argument("--columns", type=int, required=True)
     parser.add_argument("--dwell", type=float, required=True, help="Dwell time in seconds")
@@ -39,6 +44,7 @@ def main() -> None:
         csi,
         args.mask,
         args.output,
+        basis_path=args.basis,
         pcr_snr_min=args.pcr_snr_min,
         min_retained_voxels=args.min_retained_voxels,
     )

@@ -1,0 +1,2 @@
+include CHANGELOG.md CONTRIBUTING.md THIRD_PARTY.md
+recursive-include examples *.md *.py *.pdf

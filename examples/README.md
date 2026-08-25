@@ -15,15 +15,17 @@ private Twix and Siemens DICOM workflows:
   `(5600,0020)` or the observed Siemens private payload `(7fe1,1010)`.
 
 Both then use LCMish's current masked 31P-CSI workflow: PCr SNR filtering, PCr
-alignment, phase correction, coherent voxel combination, and the experimental
-local NAD-region fit. They save the SNR and retained masks, the combined signal
-and fitted arrays, a diagnostic figure, and a JSON audit summary.
+alignment, phase correction, coherent voxel combination, the experimental
+local NAD-region fit, and a whole-spectrum fit with the bundled Siemens 3 T
+starter basis. Pass `--basis another.BASIS` to use a different basis. They save
+the SNR and retained masks, fitted arrays and tables, diagnostic figures, and a
+JSON audit summary.
 
 Install the optional reader needed by the input format:
 
 ```console
 python -m pip install 'lcmish[twix]'   # Twix
-python -m pip install lcmish pydicom   # Siemens DICOM spectroscopy
+python -m pip install 'lcmish[siemens]' # Twix and Siemens DICOM spectroscopy
 ```
 
 A verified anatomical mask is mandatory. It must be a NumPy Boolean array with
@@ -57,5 +59,6 @@ python examples/siemens_dicom_csi.py \
 
 - `synthetic_31p.py` demonstrates a synthetic whole-spectrum fit.
 - `p31_2d_csi_redox.py` demonstrates the masked CSI route without vendor I/O.
-- `generate_open_p31_basis.py` generates the experimental open 31P basis in
-  the development branch.
+The installed package includes
+`LCMish_Brain_31P_Haukeland_Siemens3T_1024.BASIS` as an experimental starter
+basis. It can also be loaded directly with `lcmish.load_p31_brain_basis()`.

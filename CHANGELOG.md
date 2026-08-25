@@ -1,7 +1,15 @@
 # Changelog
 
-## 0.3.0.dev0 — 2026-08-24 pre-release
+## 0.3.0 — 2026-08-25
 
+- Added a bundled, provenance-documented experimental human-brain 31P starter
+  basis for a Haukeland Siemens 3 T CSI preset: 1024 acquired complex points,
+  0.5 ms dwell time and 49.891996 MHz transmitter frequency.
+- The ready-to-use LCModel-style `.BASIS` file and JSON provenance sidecar are
+  included in the wheel and source distribution.
+- Added PE, PC, extracellular/intracellular Pi, GPE, GPC, PCr, alpha/beta/gamma
+  ATP, NAD+ and NADH components. Complex nucleotide-sugar, blood-nuisance and
+  membrane-background models remain deliberately excluded pending validation.
 - Added an explicitly experimental, literature-constrained local 31P NAD-region
   fitter for NAD+, NADH and neighbouring alpha-ATP.
 - Added field-dependent NAD+ AB-quartet generation, phosphorus-count
@@ -15,6 +23,9 @@
   and is withheld when the workflow or component-identifiability checks fail.
 - This workflow requires adaptation and independent validation for other
   acquisitions, localization schemes, scanners or voxel-selection strategies.
+- Added explicit Siemens Twix 2-D CSI reconstruction and Siemens MR
+  Spectroscopy DICOM payload readers, with runnable masked-workflow examples.
+- Added `pydicom` and combined Siemens optional-dependency groups.
 
 ## 0.2.2 — 2026-08-24
 
