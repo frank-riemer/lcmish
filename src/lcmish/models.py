@@ -164,11 +164,18 @@ class FitConfig:
     initial_gaussian_hz: float = 3.0
     groups: tuple[GroupConfig, ...] = ()
     max_nfev: int = 300
+    fit_domain: str = "complex"
 
 
 @dataclass
 class FitResult:
-    """Result of a single LCMish fit."""
+    """Result of a single LCMish fit.
+
+    ``data``, ``fit``, ``baseline``, ``residual`` and ``components`` contain
+    the phase-corrected real display channel.  Complex-domain fits also retain
+    the corresponding imaginary display channel in the optional ``*_imag``
+    fields so that phase quality and complex residuals remain inspectable.
+    """
 
     names: list[str]
     ppm: np.ndarray
@@ -185,6 +192,11 @@ class FitResult:
     message: str
     cost: float
     metadata: dict[str, Any] = field(default_factory=dict)
+    data_imag: np.ndarray | None = None
+    fit_imag: np.ndarray | None = None
+    baseline_imag: np.ndarray | None = None
+    residual_imag: np.ndarray | None = None
+    components_imag: dict[str, np.ndarray] = field(default_factory=dict)
 
     def summary_rows(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -212,6 +224,14 @@ class FitResult:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         fields = ["ppm", "data", "fit", "baseline", "residual", *self.names]
+        if self.data_imag is not None:
+            fields += [
+                "data_imag",
+                "fit_imag",
+                "baseline_imag",
+                "residual_imag",
+                *(f"{name}_imag" for name in self.names),
+            ]
         with path.open("w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fields)
             writer.writeheader()
@@ -225,6 +245,17 @@ class FitResult:
                 }
                 for name in self.names:
                     row[name] = float(self.components[name][i])
+                if self.data_imag is not None:
+                    row.update(
+                        {
+                            "data_imag": float(self.data_imag[i]),
+                            "fit_imag": float(self.fit_imag[i]),
+                            "baseline_imag": float(self.baseline_imag[i]),
+                            "residual_imag": float(self.residual_imag[i]),
+                        }
+                    )
+                    for name in self.names:
+                        row[f"{name}_imag"] = float(self.components_imag[name][i])
                 writer.writerow(row)
 
     def save_table(self, path: str | Path, *, title: str = "LCMish fit", metadata: dict | None = None) -> None:
@@ -269,6 +300,10 @@ class FitResult:
             amplitudes=self.amplitudes,
             amplitude_se=self.amplitude_se,
             crlb_percent=self.crlb_percent,
+            data_imag=self.data_imag,
+            fit_imag=self.fit_imag,
+            baseline_imag=self.baseline_imag,
+            residual_imag=self.residual_imag,
             nonlinear_json=json.dumps(self.nonlinear),
             metadata_json=json.dumps(payload_meta, default=str),
         )
@@ -304,6 +339,14 @@ class FitResult:
         ax.plot(self.ppm, self.baseline, lw=0.9, ls="--", label="baseline")
         offset = np.nanmin(self.data) - 0.15 * max(np.ptp(self.data), 1.0)
         ax.plot(self.ppm, self.residual + offset, lw=0.8, label="residual (offset)")
+        if self.residual_imag is not None:
+            ax.plot(
+                self.ppm,
+                self.residual_imag + offset,
+                lw=0.7,
+                ls=":",
+                label="imaginary residual (offset)",
+            )
         ax.axhline(offset, lw=0.5)
         ax.set_xlim(max(self.ppm), min(self.ppm))
         ax.set_xlabel("ppm")

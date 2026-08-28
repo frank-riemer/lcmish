@@ -29,7 +29,7 @@ from .redox import (
 from .report import save_pdf_report
 from .twix import TwixData, read_twix
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = [
     "__version__",

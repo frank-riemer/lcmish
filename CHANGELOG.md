@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.1 — 2026-08-28
+
+- Fixed a phase-domain defect in the general linear-combination fitter. LCMish
+  now fits both real and imaginary spectral channels by default instead of
+  discarding the imaginary channel and rotating only a real-projected basis.
+- Fit reports and exported component curves now use the consistently
+  phase-corrected real channel. The corresponding imaginary data, fit,
+  baseline, residual and component channels remain available for QC.
+- Added an explicit legacy `fit_domain="real"` option for reproducibility. It
+  retains the historical unphased real-only behaviour and should not be used
+  as the default for new quantitative work.
+- Added regression coverage for a first-order phase ramp exceeding 180 degrees
+  across the fit range, including a resonance that was inverted in the acquired
+  real channel before phase correction.
+- Clarified that NIfTI-MRS preserves complex data and phase-cycle/dynamic
+  dimensions but does not itself perform phase correction, coil combination or
+  vendor/sequence-specific reconstruction.
+
 ## 0.3.0 — 2026-08-25
 
 - Added a bundled, provenance-documented experimental human-brain 31P starter

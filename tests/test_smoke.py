@@ -41,6 +41,92 @@ def test_synthetic_fit_recovers_relative_amplitudes():
     ratio = result.amplitudes[1] / result.amplitudes[0]
     assert np.isclose(ratio, 0.25, rtol=0.05)
     assert np.linalg.norm(result.residual) / np.linalg.norm(result.data) < 0.03
+    assert result.metadata["fit_domain"] == "complex"
+    assert result.data_imag is not None
+    assert result.residual_imag is not None
+
+
+def test_complex_fit_phase_corrects_large_first_order_ramp_for_display():
+    n = 512
+    dwell = 1 / 2500
+    f0 = 51.7
+    t = np.arange(n) * dwell
+    basis = BasisSet(
+        ["PCr", "ATPb"],
+        np.asarray([_peak(0.0, t, f0), _peak(-16.0, t, f0)]),
+        dwell_time_s=dwell,
+        transmitter_mhz=f0,
+    )
+    native_fid = 1.0 * basis.fids[0] + 0.4 * basis.fids[1]
+    native_spectrum = np.fft.fftshift(np.fft.fft(native_fid))
+    ppm = -np.fft.fftshift(np.fft.fftfreq(n, d=dwell)) / f0
+    phase0_deg = 18.0
+    phase1_deg_per_ppm = -8.0
+    acquired_spectrum = native_spectrum * np.exp(
+        1j * np.deg2rad(phase0_deg + phase1_deg_per_ppm * ppm)
+    )
+    acquired_fid = np.fft.ifft(np.fft.ifftshift(acquired_spectrum))
+    data = SpectralData(acquired_fid, dwell, f0)
+    config = FitConfig(
+        ppm_range=(-18, 2),
+        zero_fill_factor=1,
+        baseline_knots=6,
+        baseline_lambda=1e8,
+        global_shift_bounds_ppm=(-1e-3, 1e-3),
+        phase0_bounds_deg=(17.0, 19.0),
+        phase1_bounds_deg_per_ppm=(-8.2, -7.8),
+        lorentzian_bounds_hz=(0, 2.0),
+        gaussian_bounds_hz=(0, 2.0),
+        initial_phase0_deg=18.1,
+        initial_phase1_deg_per_ppm=-8.1,
+        initial_lorentzian_hz=0.1,
+        initial_gaussian_hz=0.1,
+        max_nfev=100,
+    )
+
+    result = fit_spectrum(data, basis, config)
+
+    assert result.success
+    assert np.isclose(result.amplitudes[1] / result.amplitudes[0], 0.4, rtol=0.03)
+    assert np.isclose(result.nonlinear["phase0_deg"], phase0_deg, atol=0.15)
+    assert np.isclose(
+        result.nonlinear["phase1_deg_per_ppm"], phase1_deg_per_ppm, atol=0.05
+    )
+    for centre in (0.0, -16.0):
+        local = np.abs(result.ppm - centre) < 0.15
+        assert np.max(result.data[local]) > 0
+        assert np.max(result.fit[local]) > 0
+    complex_residual = np.hypot(
+        np.linalg.norm(result.residual), np.linalg.norm(result.residual_imag)
+    )
+    complex_data = np.hypot(
+        np.linalg.norm(result.data), np.linalg.norm(result.data_imag)
+    )
+    assert complex_residual / complex_data < 1e-4
+
+
+def test_legacy_real_fit_domain_remains_explicitly_available():
+    n = 128
+    dwell = 1 / 2000
+    f0 = 51.7
+    t = np.arange(n) * dwell
+    basis = BasisSet(["PCr"], np.asarray([_peak(0.0, t, f0)]))
+    data = SpectralData(basis.fids[0].copy(), dwell, f0)
+    config = FitConfig(
+        ppm_range=(-3, 3), fit_domain="real", baseline_knots=6, max_nfev=20
+    )
+
+    result = fit_spectrum(data, basis, config)
+
+    assert result.metadata["fit_domain"] == "real"
+    assert result.data_imag is None
+
+
+def test_invalid_fit_domain_is_rejected():
+    data = SpectralData(np.ones(16, dtype=complex), 0.001, 51.7)
+    basis = BasisSet(["PCr"], np.ones((1, 16), dtype=complex))
+    with np.testing.assert_raises_regex(ValueError, "fit_domain"):
+        fit_spectrum(data, basis, FitConfig(ppm_range=(-2, 2), fit_domain="magnitude"))
 
 
 def test_multistart_returns_audit():

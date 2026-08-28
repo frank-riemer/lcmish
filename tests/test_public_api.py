@@ -2,7 +2,7 @@ import lcmish
 
 
 def test_version_lineage():
-    assert lcmish.__version__ == "0.3.0"
+    assert lcmish.__version__ == "0.3.1"
 
 
 def test_expected_public_api():

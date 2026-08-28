@@ -211,6 +211,7 @@ def _components_for_params(
     ppm: np.ndarray,
     group_by_name: dict[str, GroupConfig],
 ) -> np.ndarray:
+    """Return complex metabolite spectra in the acquired-data phase frame."""
     t = np.arange(nfft, dtype=float) * data.dwell_time_s
     phase0 = np.deg2rad(params["phase0_deg"])
     phase1 = np.deg2rad(params["phase1_deg_per_ppm"])
@@ -233,38 +234,108 @@ def _components_for_params(
         freq = np.exp(1j * 2.0 * np.pi * shift_hz * t)
         transformed = fid * lor * gauss * freq
         spec = np.fft.fftshift(np.fft.fft(transformed, n=nfft)) * phase
-        out.append(spec.real)
+        out.append(spec)
     return np.column_stack(out)
 
 
-def _solve_linear(y, metab, baseline, config: FitConfig):
-    n_metab = metab.shape[1]
-    n_base = baseline.shape[1]
-    design = np.column_stack([metab, baseline])
-    if n_base >= 3 and config.baseline_lambda > 0:
-        d2 = _second_difference(n_base)
-        reg = np.column_stack([np.zeros((d2.shape[0], n_metab)), np.sqrt(config.baseline_lambda) * d2])
+def _regularised_linear_solution(
+    y: np.ndarray,
+    design: np.ndarray,
+    *,
+    n_metab: int,
+    baseline_blocks: tuple[tuple[int, int], ...],
+    config: FitConfig,
+) -> np.ndarray:
+    """Solve a real-valued bounded linear problem with smooth baselines."""
+    regularisers = []
+    if config.baseline_lambda > 0:
+        for start, size in baseline_blocks:
+            if size < 3:
+                continue
+            d2 = _second_difference(size)
+            reg = np.zeros((d2.shape[0], design.shape[1]), dtype=float)
+            reg[:, start : start + size] = np.sqrt(config.baseline_lambda) * d2
+            regularisers.append(reg)
+    if regularisers:
+        reg = np.vstack(regularisers)
         a_aug = np.vstack([design, reg])
         y_aug = np.r_[y, np.zeros(reg.shape[0])]
     else:
         a_aug, y_aug = design, y
-    lower = np.r_[np.zeros(n_metab) if config.nonnegative_amplitudes else np.full(n_metab, -np.inf), np.full(n_base, -np.inf)]
-    upper = np.full(n_metab + n_base, np.inf)
-    solved = lsq_linear(a_aug, y_aug, bounds=(lower, upper), method="trf", lsmr_tol="auto", max_iter=300)
-    return solved.x, design
+    lower = np.r_[
+        np.zeros(n_metab)
+        if config.nonnegative_amplitudes
+        else np.full(n_metab, -np.inf),
+        np.full(design.shape[1] - n_metab, -np.inf),
+    ]
+    upper = np.full(design.shape[1], np.inf)
+    solved = lsq_linear(
+        a_aug,
+        y_aug,
+        bounds=(lower, upper),
+        method="trf",
+        lsmr_tol="auto",
+        max_iter=300,
+    )
+    return solved.x
+
+
+def _solve_linear_real(y, metab, baseline, config: FitConfig):
+    n_metab = metab.shape[1]
+    n_base = baseline.shape[1]
+    design = np.column_stack([metab, baseline])
+    coeff = _regularised_linear_solution(
+        y,
+        design,
+        n_metab=n_metab,
+        baseline_blocks=((n_metab, n_base),),
+        config=config,
+    )
+    return coeff, design
+
+
+def _solve_linear_complex(y, metab, baseline, config: FitConfig):
+    """Fit complex data with real metabolite amplitudes and complex splines."""
+    n_metab = metab.shape[1]
+    n_base = baseline.shape[1]
+    zeros = np.zeros_like(baseline)
+    design = np.block(
+        [
+            [metab.real, baseline, zeros],
+            [metab.imag, zeros, baseline],
+        ]
+    )
+    target = np.r_[y.real, y.imag]
+    coeff = _regularised_linear_solution(
+        target,
+        design,
+        n_metab=n_metab,
+        baseline_blocks=((n_metab, n_base), (n_metab + n_base, n_base)),
+        config=config,
+    )
+    baseline_complex = (
+        baseline @ coeff[n_metab : n_metab + n_base]
+        + 1j * baseline @ coeff[n_metab + n_base :]
+    )
+    prediction = metab @ coeff[:n_metab] + baseline_complex
+    return coeff, design, target, prediction, baseline_complex
 
 
 def fit_spectrum(data: SpectralData, basis: BasisSet, config: FitConfig) -> FitResult:
     """Fit one spectrum using nonlinear nuisance parameters and linear amplitudes."""
+    fit_domain = str(config.fit_domain).strip().lower()
+    if fit_domain not in {"complex", "real"}:
+        raise ValueError("fit_domain must be 'complex' or 'real'")
     nfft = _next_pow_two(data.npoints * max(1, int(config.zero_fill_factor)))
     ppm_all = data.ppm_axis(nfft)
-    spectrum_all = np.fft.fftshift(np.fft.fft(data.fid, n=nfft)).real
+    spectrum_all = np.fft.fftshift(np.fft.fft(data.fid, n=nfft))
     lo, hi = sorted(config.ppm_range)
     mask = (ppm_all >= lo) & (ppm_all <= hi)
     if np.count_nonzero(mask) < 32:
         raise ValueError("Fit ppm range contains too few spectral points")
     ppm = ppm_all[mask]
-    y = spectrum_all[mask]
+    y_complex = spectrum_all[mask]
+    y = y_complex if fit_domain == "complex" else y_complex.real
     baseline = _bspline_matrix(ppm, max(5, int(config.baseline_knots)))
 
     keys, x0, lower, upper, _active_groups = _parameter_spec(config, basis)
@@ -276,14 +347,25 @@ def fit_spectrum(data: SpectralData, basis: BasisSet, config: FitConfig) -> FitR
         params = dict(zip(keys, map(float, x)))
         metab_all = _components_for_params(params, data=data, basis=basis, nfft=nfft, ppm=ppm_all, group_by_name=group_by_name)
         metab = metab_all[mask]
-        coeff, design = _solve_linear(y, metab, baseline, config)
-        pred = design @ coeff
+        if fit_domain == "complex":
+            coeff, design, target, pred_complex, baseline_complex = _solve_linear_complex(
+                y_complex, metab, baseline, config
+            )
+            pred = np.r_[pred_complex.real, pred_complex.imag]
+            residual = target - pred
+            cache["target"] = target
+            cache["pred_complex"] = pred_complex
+            cache["baseline_complex"] = baseline_complex
+        else:
+            coeff, design = _solve_linear_real(y, metab.real, baseline, config)
+            pred = design @ coeff
+            residual = y - pred
         cache["params"] = params
         cache["metab"] = metab
         cache["coeff"] = coeff
         cache["design"] = design
         cache["pred"] = pred
-        return y - pred
+        return residual
 
     optimum = least_squares(evaluate, x0, bounds=(lower, upper), max_nfev=config.max_nfev, method="trf")
     residual = evaluate(optimum.x)
@@ -294,11 +376,41 @@ def fit_spectrum(data: SpectralData, basis: BasisSet, config: FitConfig) -> FitR
     pred = np.asarray(cache["pred"])
     n_metab = basis.ncomponents
     amps = coeff[:n_metab]
-    base_coeff = coeff[n_metab:]
-    baseline_fit = baseline @ base_coeff
-    components = {name: metab[:, i] * amps[i] for i, name in enumerate(basis.names)}
+    phase0 = np.deg2rad(params["phase0_deg"])
+    phase1 = np.deg2rad(params["phase1_deg_per_ppm"])
+    phase = np.exp(
+        1j * (phase0 + phase1 * (ppm - float(data.reference_ppm)))
+    )
+    phase_correction = np.conj(phase)
 
-    dof = max(1, y.size - design.shape[1] - len(keys))
+    if fit_domain == "complex":
+        baseline_raw = np.asarray(cache["baseline_complex"])
+        fit_raw = np.asarray(cache["pred_complex"])
+        data_display = y_complex * phase_correction
+        fit_display = fit_raw * phase_correction
+        baseline_display = baseline_raw * phase_correction
+        residual_display = (y_complex - fit_raw) * phase_correction
+        component_complex = {
+            name: metab[:, i] * amps[i] * phase_correction
+            for i, name in enumerate(basis.names)
+        }
+        components = {name: value.real for name, value in component_complex.items()}
+        components_imag = {name: value.imag for name, value in component_complex.items()}
+    else:
+        base_coeff = coeff[n_metab:]
+        baseline_fit = baseline @ base_coeff
+        data_display = y.astype(np.complex128)
+        fit_display = pred.astype(np.complex128)
+        baseline_display = baseline_fit.astype(np.complex128)
+        residual_display = residual.astype(np.complex128)
+        components = {
+            name: metab[:, i].real * amps[i]
+            for i, name in enumerate(basis.names)
+        }
+        components_imag = {}
+
+    target_size = 2 * y_complex.size if fit_domain == "complex" else y.size
+    dof = max(1, target_size - design.shape[1] - len(keys))
     sigma2 = float(np.dot(residual, residual) / dof)
     try:
         cov = sigma2 * np.linalg.pinv(design.T @ design)
@@ -310,10 +422,10 @@ def fit_spectrum(data: SpectralData, basis: BasisSet, config: FitConfig) -> FitR
     return FitResult(
         names=list(basis.names),
         ppm=ppm,
-        data=y,
-        fit=pred,
-        baseline=baseline_fit,
-        residual=residual,
+        data=data_display.real,
+        fit=fit_display.real,
+        baseline=baseline_display.real,
+        residual=residual_display.real,
         components=components,
         amplitudes=amps,
         amplitude_se=se,
@@ -325,8 +437,21 @@ def fit_spectrum(data: SpectralData, basis: BasisSet, config: FitConfig) -> FitR
         metadata={
             "nfft": int(nfft),
             "fit_ppm_range": [float(lo), float(hi)],
+            "fit_domain": fit_domain,
+            "display_domain": (
+                "phase-corrected complex spectrum" if fit_domain == "complex" else "legacy unphased real spectrum"
+            ),
+            "phase_convention": (
+                "phase parameters rotate the basis into the acquired-data frame; "
+                "the inverse rotation is applied to data and fit for display"
+            ),
             "uncertainty": "conditional linearised CRLB-like estimate; not LCModel %SD",
         },
+        data_imag=data_display.imag if fit_domain == "complex" else None,
+        fit_imag=fit_display.imag if fit_domain == "complex" else None,
+        baseline_imag=baseline_display.imag if fit_domain == "complex" else None,
+        residual_imag=residual_display.imag if fit_domain == "complex" else None,
+        components_imag=components_imag,
     )
 
 

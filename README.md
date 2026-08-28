@@ -102,7 +102,7 @@ python -m pytest
 
 [NIfTI-MRS](https://github.com/wtclarke/mrs_nifti_standard) is the preferred vendor-neutral input format. Scanner raw formats evolve, whereas a defined interchange standard provides the fitter with a stable input contract.
 
-LCMish reads the complex time-domain signal, dwell time, spectrometer frequency, resonant nucleus, spatial affine and NIfTI-MRS JSON metadata. If `SpecFreqChemShift` is present it is used as the spectral-centre reference; it can always be overridden explicitly.
+LCMish reads the complex time-domain signal, dwell time, spectrometer frequency, resonant nucleus, spatial affine and NIfTI-MRS JSON metadata. If `SpecFreqChemShift` is present it is used as the spectral-centre reference; it can always be overridden explicitly. NIfTI-MRS is a storage and interoperability standard: conversion does not by itself phase the spectrum, combine coils, resolve sequence-specific phase cycling, or validate a vendor reconstruction.
 
 A normal preprocessed SVS file is deliberately simple:
 
@@ -172,6 +172,14 @@ result.plot("fit.png")
 print(result.nonlinear)
 print(result.summary_rows())
 ```
+
+The default `fit_domain="complex"` uses both real and imaginary spectral
+channels. Phase parameters rotate the basis into the acquired-data frame; the
+inverse rotation is then applied consistently to the data, fit, baseline and
+components for the reported real spectrum. The corresponding imaginary
+channels are retained on the `FitResult` for QC. The historical real-only
+projection can be reproduced with `FitConfig(..., fit_domain="real")`, but is
+not recommended for new quantitative analyses.
 
 ### The one-page summary
 

@@ -33,8 +33,19 @@ def _fit_metrics(result: "FitResult") -> dict[str, float]:
     data = np.asarray(result.data, dtype=float)
     fit = np.asarray(result.fit, dtype=float)
     residual = np.asarray(result.residual, dtype=float)
-    data_norm = max(float(np.linalg.norm(data)), np.finfo(float).tiny)
-    relative_residual = float(np.linalg.norm(residual) / data_norm)
+    if result.data_imag is not None and result.residual_imag is not None:
+        data_norm = np.hypot(
+            np.linalg.norm(data), np.linalg.norm(np.asarray(result.data_imag, dtype=float))
+        )
+        residual_norm = np.hypot(
+            np.linalg.norm(residual),
+            np.linalg.norm(np.asarray(result.residual_imag, dtype=float)),
+        )
+    else:
+        data_norm = np.linalg.norm(data)
+        residual_norm = np.linalg.norm(residual)
+    data_norm = max(float(data_norm), np.finfo(float).tiny)
+    relative_residual = float(residual_norm / data_norm)
     if np.std(data) <= np.finfo(float).tiny or np.std(fit) <= np.finfo(float).tiny:
         correlation = float("nan")
     else:
@@ -134,7 +145,16 @@ def save_pdf_report(
     ax_spec.set_title("Observed spectrum and fitted model", fontsize=9.5, loc="left")
 
     ax_res = fig.add_subplot(grid[2, :], sharex=ax_spec)
-    ax_res.plot(ppm, residual, linewidth=0.75)
+    ax_res.plot(ppm, residual, linewidth=0.75, label="real residual")
+    if result.residual_imag is not None:
+        ax_res.plot(
+            ppm,
+            np.asarray(result.residual_imag, dtype=float),
+            linewidth=0.65,
+            linestyle=":",
+            label="imaginary residual",
+        )
+        ax_res.legend(frameon=False, fontsize=7.5, ncol=2, loc="upper right")
     ax_res.axhline(0.0, linewidth=0.55)
     ax_res.set_xlim(float(np.max(ppm)), float(np.min(ppm)))
     ax_res.set_ylabel("residual")
