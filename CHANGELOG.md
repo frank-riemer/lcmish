@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Added experimental non-NAD phase estimation from Pi, PCr, gamma-ATP and
+  beta-ATP, with explicit SNR and phase-residual QC.
+- Added native-grid phase correction and an anchor-informed NAD-region helper
+  that records the complete phase audit alongside the fit.
+- Added an optional alpha-ATP-only phase nuisance so that local alpha-ATP model
+  mismatch need not be absorbed by a large, unconstrained NAD-window phase
+  ramp. The existing `fit_p31_redox()` behavior remains unchanged by default.
+- Added synthetic regression tests for global phase recovery, NAD-window
+  independence, apparent-redox recovery and alpha-ATP phase separation.
+
 ## 0.3.1 — 2026-08-28
 
 - Fixed a phase-domain defect in the general linear-combination fitter. LCMish
@@ -68,5 +80,5 @@ First public-facing LCMish release, retaining the internal PyLCModel version lin
 - Added table, CSV, checkpoint and figure outputs.
 - Added an LCModel-style (but clearly LCMish-labelled) one-page PDF summary with spectrum, fit, residuals, parameters and metabolite table; PDF replaces any need for PostScript as the default human-readable report.
 - Fixed NumPy compatibility by using `numpy.trapezoid` when available, with a fallback for older NumPy versions. No monkey-patching of NumPy is required in user scripts.
-- Removed study-specific paths, randomisation data, voxel choices and NOPARK-specific batch logic from the public core.
+- Removed study-specific paths, randomisation data, voxel choices and batch logic from the public core.
 - Added explicit licensing, third-party provenance and AI-assisted development disclosures.

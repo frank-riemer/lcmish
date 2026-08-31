@@ -9,6 +9,7 @@ pipeline for other acquisition types.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from itertools import product
 from typing import Any
 
 import numpy as np
@@ -43,12 +44,87 @@ class P31RedoxConfig:
     alpha_extra_linewidth_bounds_hz: tuple[float, float] = (0.0, 12.0)
     initial_nad_linewidth_hz: float = 10.0
     initial_alpha_extra_linewidth_hz: float = 1.5
+    fit_alpha_phase_offset: bool = False
+    alpha_phase_offset_bounds_deg: tuple[float, float] = (-35.0, 35.0)
+    initial_alpha_phase_offset_deg: float = 0.0
     baseline_order: int = 2
     include_nucleotide_sugar_nuisance: bool = False
     nucleotide_sugar_center_ppm: float = -8.20
     nucleotide_sugar_j_hz: float = 20.5
     bootstrap_repeats: int = 0
     random_seed: int = 20260821
+
+
+@dataclass(frozen=True)
+class P31AnchorPhaseConfig:
+    """Non-NAD phase anchors and QC for local redox fitting.
+
+    The default anchors deliberately exclude alpha-ATP and the NAD region.
+    They assume PCr has already been frequency-aligned near 0 ppm. The
+    estimator is intended to audit residual zero/first-order phase; it does
+    not replace sequence-specific acquisition-delay correction.
+    """
+
+    anchor_windows_ppm: tuple[tuple[str, tuple[float, float]], ...] = (
+        ("Pi", (4.3, 5.5)),
+        ("PCr", (-0.45, 0.45)),
+        ("gamma_ATP", (-3.3, -1.7)),
+        ("beta_ATP", (-16.8, -15.1)),
+    )
+    noise_windows_ppm: tuple[tuple[float, float], ...] = (
+        (8.5, 9.8),
+        (-19.8, -18.0),
+    )
+    pivot_ppm: float = 0.0
+    minimum_anchor_peak_snr: float = 3.0
+    minimum_anchors: int = 3
+    baseline_edge_fraction: float = 0.16
+    maximum_abs_phase1_deg_per_ppm: float = 60.0
+    maximum_phase_residual_rms_deg: float = 20.0
+    residual_phase0_bounds_deg: tuple[float, float] = (-1.0, 1.0)
+    residual_phase1_bounds_deg_per_ppm: tuple[float, float] = (-0.5, 0.5)
+
+    def __post_init__(self) -> None:
+        if self.minimum_anchor_peak_snr <= 0:
+            raise ValueError("minimum_anchor_peak_snr must be positive")
+        if self.minimum_anchors < 2:
+            raise ValueError("minimum_anchors must be at least two")
+        if not 0 < self.baseline_edge_fraction < 0.5:
+            raise ValueError("baseline_edge_fraction must be between zero and 0.5")
+        if self.maximum_abs_phase1_deg_per_ppm <= 0:
+            raise ValueError("maximum_abs_phase1_deg_per_ppm must be positive")
+        if self.maximum_phase_residual_rms_deg <= 0:
+            raise ValueError("maximum_phase_residual_rms_deg must be positive")
+
+
+@dataclass(frozen=True)
+class P31AnchorPhaseEstimate:
+    """Auditable zero/first-order phase estimate from non-NAD peaks."""
+
+    phase0_deg: float
+    phase1_deg_per_ppm: float
+    pivot_ppm: float
+    anchor_names: tuple[str, ...]
+    anchor_peak_ppm: np.ndarray
+    anchor_peak_snr: np.ndarray
+    anchor_phase_deg: np.ndarray
+    anchor_unwrapped_phase_deg: np.ndarray
+    anchor_phase_residual_deg: np.ndarray
+    phase_residual_rms_deg: float
+    nfft: int
+
+
+@dataclass
+class P31AnchorInformedRedoxResult:
+    """Anchor phase audit, corrected spectrum and local redox fit."""
+
+    phase: P31AnchorPhaseEstimate
+    corrected: SpectralData
+    fit: "P31RedoxResult"
+
+    @property
+    def apparent_redox_ratio(self) -> float:
+        return self.fit.apparent_redox_ratio
 
 
 @dataclass
@@ -229,6 +305,7 @@ def _component_spectra(
     alpha_relative_shift_ppm: float,
     phase0_deg: float,
     phase1_deg_per_ppm: float,
+    alpha_phase_offset_deg: float = 0.0,
 ) -> tuple[tuple[str, ...], np.ndarray]:
     time = data.time_axis()
     nad_positions, nad_weights = nad_plus_ab_pattern(data.transmitter_mhz, config)
@@ -283,6 +360,7 @@ def _component_spectra(
         )
         names.append("nucleotide_sugar_nuisance")
     spectra = np.fft.fftshift(np.fft.fft(np.stack(fids), n=nfft, axis=1), axes=1)
+    spectra[2] *= np.exp(1j * np.deg2rad(float(alpha_phase_offset_deg)))
     ppm = data.ppm_axis(nfft)
     phase = np.deg2rad(
         phase0_deg + phase1_deg_per_ppm * (ppm - config.alpha_atp_center_ppm)
@@ -315,6 +393,7 @@ def fit_p31_redox(
     cache: dict[str, Any] = {}
 
     def solve_linear(theta: np.ndarray, target: np.ndarray = y):
+        alpha_phase_offset_deg = theta[6] if config.fit_alpha_phase_offset else 0.0
         names, spectra = _component_spectra(
             data,
             config,
@@ -325,6 +404,7 @@ def fit_p31_redox(
             theta[3],
             theta[4],
             theta[5],
+            alpha_phase_offset_deg,
         )
         component_matrix = spectra[:, mask].real.T
         design = np.column_stack([component_matrix, baseline_columns])
@@ -371,6 +451,10 @@ def fit_p31_redox(
             0.0,
         ]
     )
+    if config.fit_alpha_phase_offset:
+        lower = np.r_[lower, config.alpha_phase_offset_bounds_deg[0]]
+        upper = np.r_[upper, config.alpha_phase_offset_bounds_deg[1]]
+        initial = np.r_[initial, config.initial_alpha_phase_offset_deg]
     nonlinear = least_squares(
         lambda theta: solve_linear(theta)[0] - y,
         initial,
@@ -423,19 +507,22 @@ def fit_p31_redox(
         np.linalg.norm(residual_values)
         / max(np.linalg.norm(y), np.finfo(float).eps)
     )
+    nonlinear_values = {
+        "common_shift_ppm": float(nonlinear.x[0]),
+        "nad_linewidth_hz": float(nonlinear.x[1]),
+        "alpha_extra_linewidth_hz": float(nonlinear.x[2]),
+        "alpha_relative_shift_ppm": float(nonlinear.x[3]),
+        "phase0_deg": float(nonlinear.x[4]),
+        "phase1_deg_per_ppm": float(nonlinear.x[5]),
+    }
+    if config.fit_alpha_phase_offset:
+        nonlinear_values["alpha_phase_offset_deg"] = float(nonlinear.x[6])
     return P31RedoxResult(
         names=names,
         amplitudes=amplitudes,
         amplitude_se=amplitude_se,
         crlb_percent=crlb,
-        nonlinear={
-            "common_shift_ppm": float(nonlinear.x[0]),
-            "nad_linewidth_hz": float(nonlinear.x[1]),
-            "alpha_extra_linewidth_hz": float(nonlinear.x[2]),
-            "alpha_relative_shift_ppm": float(nonlinear.x[3]),
-            "phase0_deg": float(nonlinear.x[4]),
-            "phase1_deg_per_ppm": float(nonlinear.x[5]),
-        },
+        nonlinear=nonlinear_values,
         ppm=ppm,
         data=y,
         fit=fitted,
@@ -458,6 +545,7 @@ def fit_p31_redox(
             "phosphorus_count_normalized": True,
             "nfft": nfft,
             "nucleotide_sugar_nuisance": config.include_nucleotide_sugar_nuisance,
+            "alpha_phase_offset_fitted": config.fit_alpha_phase_offset,
         },
     )
 
@@ -495,6 +583,257 @@ def _integrate(
         raise ValueError(f"Integration window {window} contains fewer than two points")
     order = np.argsort(ppm[mask])
     return trapezoid(values[..., mask][..., order], ppm[mask][order], axis=-1)
+
+
+def _complex_median(values: np.ndarray) -> complex:
+    return complex(np.median(values.real), np.median(values.imag))
+
+
+def _robust_complex_noise_sd(
+    ppm: np.ndarray,
+    spectrum: np.ndarray,
+    windows: tuple[tuple[float, float], ...],
+) -> float:
+    mask = np.zeros(ppm.shape, dtype=bool)
+    for window in windows:
+        mask |= _window_mask(ppm, window)
+    if np.count_nonzero(mask) < 8:
+        raise ValueError("Phase-anchor noise windows contain fewer than eight points")
+    noise = spectrum[mask]
+    centre = _complex_median(noise)
+    real_sd = np.median(np.abs(noise.real - centre.real)) / 0.67448975
+    imag_sd = np.median(np.abs(noise.imag - centre.imag)) / 0.67448975
+    return max(
+        float(np.sqrt((real_sd**2 + imag_sd**2) / 2.0)),
+        np.finfo(float).tiny,
+    )
+
+
+def _anchor_measurement(
+    ppm: np.ndarray,
+    spectrum: np.ndarray,
+    window: tuple[float, float],
+    noise_sd: float,
+    edge_fraction: float,
+) -> tuple[float, float, float]:
+    mask = _window_mask(ppm, window)
+    if np.count_nonzero(mask) < 8:
+        raise ValueError(f"Phase-anchor window {window} contains fewer than eight points")
+    order = np.argsort(ppm[mask])
+    x = ppm[mask][order]
+    values = spectrum[mask][order]
+    edge_points = max(2, int(round(edge_fraction * values.size)))
+    edge_points = min(edge_points, max(2, (values.size - 1) // 3))
+    left = _complex_median(values[:edge_points])
+    right = _complex_median(values[-edge_points:])
+    baseline = left + (right - left) * (x - x[0]) / (x[-1] - x[0])
+    signal = values - baseline
+    area = complex(trapezoid(signal, x))
+    peak_index = int(np.argmax(np.abs(signal)))
+    peak_snr = float(np.abs(signal[peak_index]) / noise_sd)
+    return float(x[peak_index]), float(np.degrees(np.angle(area))), peak_snr
+
+
+def _unwrap_linear_phase(
+    ppm: np.ndarray,
+    phase_deg: np.ndarray,
+    weights: np.ndarray,
+    *,
+    pivot_ppm: float,
+    maximum_abs_slope: float,
+) -> tuple[float, float, np.ndarray, np.ndarray, float]:
+    order = np.argsort(ppm)
+    x = ppm[order] - float(pivot_ppm)
+    observed = phase_deg[order]
+    weight = np.maximum(weights[order], np.finfo(float).tiny)
+    design = np.column_stack([np.ones(x.size), x])
+    root_weight = np.sqrt(weight)
+    best: tuple[float, np.ndarray, np.ndarray, np.ndarray] | None = None
+    # A first-order phase can cross the +/-180-degree display boundary. Search
+    # a small set of equivalent wraps instead of relying on sequence-dependent
+    # np.unwrap behaviour.
+    for wraps in product(range(-2, 3), repeat=x.size - 1):
+        candidate = observed + 360.0 * np.r_[0, wraps]
+        coefficients = np.linalg.lstsq(
+            design * root_weight[:, None],
+            candidate * root_weight,
+            rcond=None,
+        )[0]
+        if abs(coefficients[1]) > maximum_abs_slope:
+            continue
+        residual = candidate - design @ coefficients
+        rms = float(np.sqrt(np.sum(weight * residual**2) / np.sum(weight)))
+        score = rms + 1e-6 * abs(float(coefficients[1]))
+        if best is None or score < best[0]:
+            best = (score, coefficients, candidate, residual)
+    if best is None:
+        raise ValueError("No phase unwrap satisfied the configured slope bound")
+    _, coefficients, unwrapped, residual = best
+    wrapped_phase0 = float((coefficients[0] + 180.0) % 360.0 - 180.0)
+    common_wrap = wrapped_phase0 - float(coefficients[0])
+    unwrapped = unwrapped + common_wrap
+    coefficients = coefficients.copy()
+    coefficients[0] = wrapped_phase0
+    inverse_order = np.argsort(order)
+    residual_rms = float(np.sqrt(np.sum(weight * residual**2) / np.sum(weight)))
+    return (
+        float(coefficients[0]),
+        float(coefficients[1]),
+        unwrapped[inverse_order],
+        residual[inverse_order],
+        residual_rms,
+    )
+
+
+def estimate_p31_anchor_phase(
+    data: SpectralData,
+    config: P31AnchorPhaseConfig | None = None,
+    *,
+    nfft: int | None = None,
+) -> P31AnchorPhaseEstimate:
+    """Estimate residual phase from Pi, PCr and ATP peaks outside NAD.
+
+    Only anchors meeting the configured peak-SNR threshold enter the weighted
+    phase line. A poor anchor fit raises ``ValueError`` instead of silently
+    using the NAD region to determine phase.
+    """
+    config = config or P31AnchorPhaseConfig()
+    nfft = int(nfft or max(4096, 4 * data.npoints))
+    ppm = data.ppm_axis(nfft)
+    spectrum = data.spectrum(nfft)
+    noise_sd = _robust_complex_noise_sd(ppm, spectrum, config.noise_windows_ppm)
+    names: list[str] = []
+    peaks: list[float] = []
+    phases: list[float] = []
+    snrs: list[float] = []
+    for name, window in config.anchor_windows_ppm:
+        peak, phase, snr = _anchor_measurement(
+            ppm,
+            spectrum,
+            window,
+            noise_sd,
+            config.baseline_edge_fraction,
+        )
+        if snr >= config.minimum_anchor_peak_snr:
+            names.append(name)
+            peaks.append(peak)
+            phases.append(phase)
+            snrs.append(snr)
+    if len(names) < config.minimum_anchors:
+        raise ValueError(
+            f"Only {len(names)} non-NAD phase anchors passed SNR; "
+            f"requires {config.minimum_anchors}"
+        )
+    peak_array = np.asarray(peaks, dtype=float)
+    phase_array = np.asarray(phases, dtype=float)
+    snr_array = np.asarray(snrs, dtype=float)
+    phase0, phase1, unwrapped, residual, residual_rms = _unwrap_linear_phase(
+        peak_array,
+        phase_array,
+        np.minimum(snr_array, 25.0),
+        pivot_ppm=config.pivot_ppm,
+        maximum_abs_slope=config.maximum_abs_phase1_deg_per_ppm,
+    )
+    if residual_rms > config.maximum_phase_residual_rms_deg:
+        raise ValueError(
+            f"Non-NAD phase-anchor residual RMS {residual_rms:.3g} degrees "
+            f"exceeds {config.maximum_phase_residual_rms_deg:.3g}"
+        )
+    return P31AnchorPhaseEstimate(
+        phase0_deg=phase0,
+        phase1_deg_per_ppm=phase1,
+        pivot_ppm=float(config.pivot_ppm),
+        anchor_names=tuple(names),
+        anchor_peak_ppm=peak_array,
+        anchor_peak_snr=snr_array,
+        anchor_phase_deg=phase_array,
+        anchor_unwrapped_phase_deg=unwrapped,
+        anchor_phase_residual_deg=residual,
+        phase_residual_rms_deg=residual_rms,
+        nfft=nfft,
+    )
+
+
+def apply_p31_phase_correction(
+    data: SpectralData,
+    phase0_deg: float,
+    phase1_deg_per_ppm: float,
+    *,
+    pivot_ppm: float = 0.0,
+) -> SpectralData:
+    """Apply a zero/first-order phase correction on the native spectral grid."""
+    ppm = data.ppm_axis()
+    spectrum = data.spectrum()
+    phase_deg = float(phase0_deg) + float(phase1_deg_per_ppm) * (
+        ppm - float(pivot_ppm)
+    )
+    corrected_spectrum = spectrum * np.exp(-1j * np.deg2rad(phase_deg))
+    corrected_fid = np.fft.ifft(np.fft.ifftshift(corrected_spectrum))
+    metadata = dict(data.metadata)
+    metadata.update(
+        {
+            "phase_correction": "non_NAD_anchor_informed",
+            "anchor_phase0_deg": float(phase0_deg),
+            "anchor_phase1_deg_per_ppm": float(phase1_deg_per_ppm),
+            "anchor_phase_pivot_ppm": float(pivot_ppm),
+        }
+    )
+    return SpectralData(
+        corrected_fid,
+        data.dwell_time_s,
+        data.transmitter_mhz,
+        data.reference_ppm,
+        metadata,
+    )
+
+
+def fit_p31_redox_anchor_informed(
+    data: SpectralData,
+    redox_config: P31RedoxConfig | None = None,
+    phase_config: P31AnchorPhaseConfig | None = None,
+    *,
+    fit_alpha_phase_offset: bool = True,
+    nfft: int | None = None,
+) -> P31AnchorInformedRedoxResult:
+    """Phase from non-NAD anchors, then fit NAD with limited residual phase.
+
+    The returned phase audit should be inspected together with local residual
+    phase-bound hits. This helper does not turn an unidentifiable NADH
+    component into a reportable redox ratio.
+    """
+    phase_config = phase_config or P31AnchorPhaseConfig()
+    phase = estimate_p31_anchor_phase(data, phase_config, nfft=nfft)
+    corrected = apply_p31_phase_correction(
+        data,
+        phase.phase0_deg,
+        phase.phase1_deg_per_ppm,
+        pivot_ppm=phase.pivot_ppm,
+    )
+    config = redox_config or P31RedoxConfig()
+    config = replace(
+        config,
+        phase0_bounds_deg=phase_config.residual_phase0_bounds_deg,
+        phase1_bounds_deg_per_ppm=phase_config.residual_phase1_bounds_deg_per_ppm,
+        fit_alpha_phase_offset=bool(fit_alpha_phase_offset),
+    )
+    fit = fit_p31_redox(corrected, config, nfft=nfft)
+    fit.metadata.update(
+        {
+            "phase_strategy": "non_NAD_anchor_informed",
+            "phase_anchor_names": list(phase.anchor_names),
+            "phase_anchor0_deg": phase.phase0_deg,
+            "phase_anchor1_deg_per_ppm": phase.phase1_deg_per_ppm,
+            "phase_anchor_residual_rms_deg": phase.phase_residual_rms_deg,
+            "residual_phase0_bounds_deg": list(
+                phase_config.residual_phase0_bounds_deg
+            ),
+            "residual_phase1_bounds_deg_per_ppm": list(
+                phase_config.residual_phase1_bounds_deg_per_ppm
+            ),
+            "anchor_informed_alpha_phase_offset": bool(fit_alpha_phase_offset),
+        }
+    )
+    return P31AnchorInformedRedoxResult(phase=phase, corrected=corrected, fit=fit)
 
 
 def p31_csi_pcr_snr(

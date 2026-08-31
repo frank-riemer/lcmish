@@ -241,6 +241,33 @@ alpha-ATP/NAD region. The result is labelled an **apparent** NAD+/NADH ratio.
 It is not returned as reportable when NADH is boundary-limited or the configured
 quality criteria fail.
 
+For acquisitions where the local NAD window tries to explain model mismatch
+with a large phase ramp, `fit_p31_redox_anchor_informed()` offers a more
+constrained experimental route. It first estimates zero- and first-order phase
+from Pi, PCr, gamma-ATP and beta-ATP, explicitly excluding both the NAD window
+and alpha-ATP. It then applies only a tightly bounded residual NAD phase and,
+by default, fits a separate alpha-ATP phase offset. The anchor audit and the
+corrected spectrum are returned with the fit:
+
+```python
+from lcmish import fit_p31_redox_anchor_informed
+
+anchored = fit_p31_redox_anchor_informed(data)
+print(anchored.phase.phase0_deg)
+print(anchored.phase.phase1_deg_per_ppm)
+print(anchored.phase.phase_residual_rms_deg)
+print(anchored.fit.apparent_redox_ratio)
+```
+
+This separation is intentional: non-NAD resonances constrain the acquisition
+phase, while the optional alpha-ATP offset represents a local acquisition or
+model nuisance rather than allowing the NAD components themselves to rotate
+freely. A good-looking local fit is not evidence that NADH is identifiable.
+Use residual-bootstrap intervals, component uncertainty and boundary occupancy,
+and treat the result as exploratory whenever those diagnostics are poor.
+Sequence-specific acquisition-delay correction must still be performed and
+validated upstream. The historical `fit_p31_redox()` defaults are unchanged.
+
 `fit_p31_csi_redox()` is a deliberately narrower convenience workflow. It
 expects reconstructed complex data with shape `(row, column, time)`, an explicit
 Boolean voxel mask, and study-specific QC thresholds. It calculates a robust
