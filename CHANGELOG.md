@@ -11,6 +11,13 @@
   ramp. The existing `fit_p31_redox()` behavior remains unchanged by default.
 - Added synthetic regression tests for global phase recovery, NAD-window
   independence, apparent-redox recovery and alpha-ATP phase separation.
+- Added an opt-in pooled nucleotide-sugar sensitivity model for
+  proton-decoupled data. Equal-area phosphorus-phosphorus doublets near -9.8
+  and -8.2 ppm share one non-negative amplitude, so the separated partner can
+  constrain the contribution overlapping NAD.
+- Added a separate linked-sugar linewidth nuisance, explicit validation that
+  the fit window includes both partners, and synthetic recovery tests. Legacy
+  redox defaults and the original unlinked nuisance model remain unchanged.
 
 ## 0.3.1 — 2026-08-28
 

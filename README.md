@@ -268,6 +268,30 @@ and treat the result as exploratory whenever those diagnostics are poor.
 Sequence-specific acquisition-delay correction must still be performed and
 validated upstream. The historical `fit_p31_redox()` defaults are unchanged.
 
+For proton-decoupled data, an additional experimental sensitivity model can
+link the two phosphorus-phosphorus doublets of a pooled UDP-sugar component.
+The signal near -9.8 ppm then constrains the same component's contribution
+under NAD near -8.2 ppm:
+
+```python
+from lcmish import P31RedoxConfig, fit_p31_redox_anchor_informed
+
+linked = P31RedoxConfig(
+    ppm_range=(-10.4, -6.5),
+    include_linked_nucleotide_sugars=True,
+)
+result = fit_p31_redox_anchor_informed(data, linked)
+```
+
+The paired component is normalized to two phosphorus nuclei and is disabled by
+default. It is a pooled pseudo-doublet sensitivity model, not a validated
+separation of UDP-glucose, UDP-galactose, UDP-GlcNAc and UDP-GalNAc. A fitted
+extra linewidth at its configured boundary, structured residual near -9.8 ppm,
+phase-bound occupancy, or unstable NADH amplitude indicates that the pooled
+model is inadequate. Those cases require a sequence-specific multi-sugar basis
+or stronger independently validated prior information; they must not be
+resolved by selecting the phase constraint that gives a preferred redox ratio.
+
 `fit_p31_csi_redox()` is a deliberately narrower convenience workflow. It
 expects reconstructed complex data with shape `(row, column, time)`, an explicit
 Boolean voxel mask, and study-specific QC thresholds. It calculates a robust

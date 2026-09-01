@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from lcmish import (
     CSIData,
@@ -43,6 +44,24 @@ def _synthetic_p31_fid(n=1024, dwell=1 / 2500.0, f0=49.892088):
     pcr = _multiplet(t, f0, [0.0], [1.0], 8.0)
     fid = 3.0 * pcr + 0.30 * nad_plus + 0.075 * nadh + 2.8 * alpha
     return fid, dwell, f0, config
+
+
+def _linked_nucleotide_sugar(t, f0, config, linewidth=14.0):
+    half_split = config.linked_nucleotide_sugar_j_hz / (2 * f0)
+    upfield = config.linked_nucleotide_sugar_upfield_center_ppm
+    overlap = config.linked_nucleotide_sugar_overlap_center_ppm
+    return _multiplet(
+        t,
+        f0,
+        [
+            upfield - half_split,
+            upfield + half_split,
+            overlap - half_split,
+            overlap + half_split,
+        ],
+        [0.5, 0.5, 0.5, 0.5],
+        linewidth,
+    )
 
 
 def _synthetic_anchor_fid(
@@ -95,6 +114,44 @@ def test_local_redox_fit_recovers_synthetic_amplitudes():
     assert result.success
     assert np.allclose(result.amplitudes[:3], [0.30, 0.075, 2.8], rtol=0.08, atol=0.005)
     assert np.isclose(result.apparent_redox_ratio, 4.0, rtol=0.12)
+
+
+def test_linked_nucleotide_sugar_fit_uses_both_phosphate_regions():
+    rng = np.random.default_rng(181)
+    fid, dwell, f0, _ = _synthetic_p31_fid()
+    config = P31RedoxConfig(
+        ppm_range=(-10.4, -6.5),
+        baseline_order=1,
+        include_linked_nucleotide_sugars=True,
+    )
+    time = np.arange(fid.size) * dwell
+    fid += 0.18 * _linked_nucleotide_sugar(time, f0, config)
+    fid += 0.0005 * (
+        rng.normal(size=fid.size) + 1j * rng.normal(size=fid.size)
+    )
+    result = fit_p31_redox(SpectralData(fid, dwell, f0), config)
+    assert result.success
+    assert result.names[:4] == (
+        "NAD_plus",
+        "NADH",
+        "alpha_ATP",
+        "UDP_sugars_linked",
+    )
+    assert np.allclose(
+        result.amplitudes[:4], [0.30, 0.075, 2.8, 0.18], rtol=0.10
+    )
+    assert np.isclose(result.apparent_redox_ratio, 4.0, rtol=0.12)
+
+
+def test_linked_nucleotide_sugar_model_requires_partner_window():
+    with pytest.raises(ValueError, match="covering both"):
+        P31RedoxConfig(include_linked_nucleotide_sugars=True)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        P31RedoxConfig(
+            ppm_range=(-10.4, -6.5),
+            include_nucleotide_sugar_nuisance=True,
+            include_linked_nucleotide_sugars=True,
+        )
 
 
 def test_non_nad_anchor_phase_recovers_known_linear_phase():

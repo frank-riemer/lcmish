@@ -51,8 +51,44 @@ class P31RedoxConfig:
     include_nucleotide_sugar_nuisance: bool = False
     nucleotide_sugar_center_ppm: float = -8.20
     nucleotide_sugar_j_hz: float = 20.5
+    include_linked_nucleotide_sugars: bool = False
+    linked_nucleotide_sugar_upfield_center_ppm: float = -9.80
+    linked_nucleotide_sugar_overlap_center_ppm: float = -8.20
+    linked_nucleotide_sugar_j_hz: float = 20.5
+    linked_nucleotide_sugar_extra_linewidth_bounds_hz: tuple[float, float] = (
+        0.0,
+        20.0,
+    )
+    initial_linked_nucleotide_sugar_extra_linewidth_hz: float = 4.0
     bootstrap_repeats: int = 0
     random_seed: int = 20260821
+
+    def __post_init__(self) -> None:
+        if (
+            self.include_nucleotide_sugar_nuisance
+            and self.include_linked_nucleotide_sugars
+        ):
+            raise ValueError(
+                "The local nucleotide-sugar nuisance and linked two-window "
+                "model are mutually exclusive"
+            )
+        if self.include_linked_nucleotide_sugars:
+            lo, hi = sorted(self.ppm_range)
+            required = (
+                self.linked_nucleotide_sugar_upfield_center_ppm,
+                self.linked_nucleotide_sugar_overlap_center_ppm,
+            )
+            if any(position < lo or position > hi for position in required):
+                raise ValueError(
+                    "The linked nucleotide-sugar model requires a ppm_range "
+                    "covering both the -9.8 and -8.2 ppm partners"
+                )
+            bounds = self.linked_nucleotide_sugar_extra_linewidth_bounds_hz
+            if bounds[0] < 0 or bounds[1] <= bounds[0]:
+                raise ValueError(
+                    "linked nucleotide-sugar linewidth bounds must be "
+                    "non-negative and increasing"
+                )
 
 
 @dataclass(frozen=True)
@@ -306,6 +342,7 @@ def _component_spectra(
     phase0_deg: float,
     phase1_deg_per_ppm: float,
     alpha_phase_offset_deg: float = 0.0,
+    linked_nucleotide_sugar_extra_linewidth_hz: float = 0.0,
 ) -> tuple[tuple[str, ...], np.ndarray]:
     time = data.time_axis()
     nad_positions, nad_weights = nad_plus_ab_pattern(data.transmitter_mhz, config)
@@ -359,6 +396,29 @@ def _component_spectra(
             )
         )
         names.append("nucleotide_sugar_nuisance")
+    if config.include_linked_nucleotide_sugars:
+        half_split = config.linked_nucleotide_sugar_j_hz / (
+            2.0 * data.transmitter_mhz
+        )
+        upfield = config.linked_nucleotide_sugar_upfield_center_ppm
+        overlap = config.linked_nucleotide_sugar_overlap_center_ppm
+        fids.append(
+            _multiplet_fid(
+                time,
+                data.transmitter_mhz,
+                [
+                    upfield - half_split,
+                    upfield + half_split,
+                    overlap - half_split,
+                    overlap + half_split,
+                ],
+                [0.5, 0.5, 0.5, 0.5],
+                nad_linewidth_hz
+                + float(linked_nucleotide_sugar_extra_linewidth_hz),
+                shift_ppm,
+            )
+        )
+        names.append("UDP_sugars_linked")
     spectra = np.fft.fftshift(np.fft.fft(np.stack(fids), n=nfft, axis=1), axes=1)
     spectra[2] *= np.exp(1j * np.deg2rad(float(alpha_phase_offset_deg)))
     ppm = data.ppm_axis(nfft)
@@ -393,7 +453,14 @@ def fit_p31_redox(
     cache: dict[str, Any] = {}
 
     def solve_linear(theta: np.ndarray, target: np.ndarray = y):
-        alpha_phase_offset_deg = theta[6] if config.fit_alpha_phase_offset else 0.0
+        next_index = 6
+        linked_sugar_extra_linewidth_hz = 0.0
+        if config.include_linked_nucleotide_sugars:
+            linked_sugar_extra_linewidth_hz = theta[next_index]
+            next_index += 1
+        alpha_phase_offset_deg = (
+            theta[next_index] if config.fit_alpha_phase_offset else 0.0
+        )
         names, spectra = _component_spectra(
             data,
             config,
@@ -405,6 +472,7 @@ def fit_p31_redox(
             theta[4],
             theta[5],
             alpha_phase_offset_deg,
+            linked_sugar_extra_linewidth_hz,
         )
         component_matrix = spectra[:, mask].real.T
         design = np.column_stack([component_matrix, baseline_columns])
@@ -451,6 +519,19 @@ def fit_p31_redox(
             0.0,
         ]
     )
+    if config.include_linked_nucleotide_sugars:
+        lower = np.r_[
+            lower,
+            config.linked_nucleotide_sugar_extra_linewidth_bounds_hz[0],
+        ]
+        upper = np.r_[
+            upper,
+            config.linked_nucleotide_sugar_extra_linewidth_bounds_hz[1],
+        ]
+        initial = np.r_[
+            initial,
+            config.initial_linked_nucleotide_sugar_extra_linewidth_hz,
+        ]
     if config.fit_alpha_phase_offset:
         lower = np.r_[lower, config.alpha_phase_offset_bounds_deg[0]]
         upper = np.r_[upper, config.alpha_phase_offset_bounds_deg[1]]
@@ -515,8 +596,16 @@ def fit_p31_redox(
         "phase0_deg": float(nonlinear.x[4]),
         "phase1_deg_per_ppm": float(nonlinear.x[5]),
     }
+    next_index = 6
+    if config.include_linked_nucleotide_sugars:
+        nonlinear_values["linked_nucleotide_sugar_extra_linewidth_hz"] = float(
+            nonlinear.x[next_index]
+        )
+        next_index += 1
     if config.fit_alpha_phase_offset:
-        nonlinear_values["alpha_phase_offset_deg"] = float(nonlinear.x[6])
+        nonlinear_values["alpha_phase_offset_deg"] = float(
+            nonlinear.x[next_index]
+        )
     return P31RedoxResult(
         names=names,
         amplitudes=amplitudes,
@@ -545,6 +634,14 @@ def fit_p31_redox(
             "phosphorus_count_normalized": True,
             "nfft": nfft,
             "nucleotide_sugar_nuisance": config.include_nucleotide_sugar_nuisance,
+            "linked_nucleotide_sugars": config.include_linked_nucleotide_sugars,
+            "linked_nucleotide_sugar_model": (
+                "equal-area paired decoupled 31P-31P doublets at "
+                f"{config.linked_nucleotide_sugar_upfield_center_ppm:.3f} and "
+                f"{config.linked_nucleotide_sugar_overlap_center_ppm:.3f} ppm"
+                if config.include_linked_nucleotide_sugars
+                else None
+            ),
             "alpha_phase_offset_fitted": config.fit_alpha_phase_offset,
         },
     )
