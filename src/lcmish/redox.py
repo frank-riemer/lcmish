@@ -1,6 +1,8 @@
 """Experimental local NAD-region fitting for phosphorus MRS.
 
-The single-spectrum model is acquisition-agnostic. The convenience CSI route
+The single-spectrum interface is vendor-independent, but its idealized basis
+omits proton coupling. It does not simulate a decoupling pulse train or apply
+NOE/relaxation response corrections. The convenience CSI route
 is deliberately narrower: it expects reconstructed complex 2-D CSI data and
 an explicit study-specific voxel mask, then performs voxel QC, PCr alignment,
 coherent combination and the local fit. It is not a universal preprocessing
@@ -26,7 +28,11 @@ class P31RedoxConfig:
     Chemical shifts use PCr = 0 ppm. The NAD+ two-spin constants are from
     Lu et al. (Magn Reson Med 2014;71:1959-1972): D=0.3211 ppm and J=20.03 Hz.
     Components are normalized by phosphorus count, so equal NAD+ and NADH
-    coefficients represent equal molecule amounts.
+    coefficients represent equal molecule amounts only under equal effective
+    acquisition response (or an independently justified calibration). Proton
+    coupling is omitted; phosphorus-phosphorus coupling is retained. No WALTZ-4
+    pulse simulation, NOE enhancement or saturation correction is performed.
+    The optional linked sugar partners assume equal effective response.
     """
 
     ppm_range: tuple[float, float] = (-9.0, -6.5)
@@ -632,6 +638,26 @@ def fit_p31_redox(
             "experimental": True,
             "unedited_spectrum_warning": True,
             "phosphorus_count_normalized": True,
+            "acquisition_model_assumptions": {
+                "basis_approximation": "idealized_proton_decoupled",
+                "proton_coupling_simulated": False,
+                "phosphorus_phosphorus_coupling_retained": True,
+                "decoupling_pulse_train_simulated": False,
+                "partial_acquisition_decoupling_simulated": False,
+                "noe_correction_applied_by_fitter": False,
+                "saturation_correction_applied_by_fitter": False,
+                "excitation_profile_correction_applied_by_fitter": False,
+                "receive_response_correction_applied_by_fitter": False,
+                "acquisition_conditions_inferred_from_headers": False,
+                "nad_ratio_interpretation": "apparent_spectral_ratio",
+                "nad_concentration_ratio_requires": (
+                    "equal_effective_response_or_independent_calibration"
+                ),
+                "linked_sugar_partner_area_ratio": (
+                    1.0 if config.include_linked_nucleotide_sugars else None
+                ),
+                "linked_sugar_relative_response_fitted": False,
+            },
             "nfft": nfft,
             "nucleotide_sugar_nuisance": config.include_nucleotide_sugar_nuisance,
             "linked_nucleotide_sugars": config.include_linked_nucleotide_sugars,

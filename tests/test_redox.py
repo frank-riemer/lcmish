@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from lcmish.redox import _component_spectra
+
 from lcmish import (
     CSIData,
     P31AnchorPhaseConfig,
@@ -114,6 +116,23 @@ def test_local_redox_fit_recovers_synthetic_amplitudes():
     assert result.success
     assert np.allclose(result.amplitudes[:3], [0.30, 0.075, 2.8], rtol=0.08, atol=0.005)
     assert np.isclose(result.apparent_redox_ratio, 4.0, rtol=0.12)
+    assumptions = result.metadata["acquisition_model_assumptions"]
+    assert assumptions["basis_approximation"] == "idealized_proton_decoupled"
+    assert assumptions["nad_ratio_interpretation"] == "apparent_spectral_ratio"
+    assert assumptions["phosphorus_phosphorus_coupling_retained"] is True
+    for key in (
+        "proton_coupling_simulated",
+        "decoupling_pulse_train_simulated",
+        "partial_acquisition_decoupling_simulated",
+        "noe_correction_applied_by_fitter",
+        "saturation_correction_applied_by_fitter",
+        "excitation_profile_correction_applied_by_fitter",
+        "receive_response_correction_applied_by_fitter",
+        "acquisition_conditions_inferred_from_headers",
+        "linked_sugar_relative_response_fitted",
+    ):
+        assert assumptions[key] is False
+    assert assumptions["linked_sugar_partner_area_ratio"] is None
 
 
 def test_linked_nucleotide_sugar_fit_uses_both_phosphate_regions():
@@ -141,6 +160,30 @@ def test_linked_nucleotide_sugar_fit_uses_both_phosphate_regions():
         result.amplitudes[:4], [0.30, 0.075, 2.8, 0.18], rtol=0.10
     )
     assert np.isclose(result.apparent_redox_ratio, 4.0, rtol=0.12)
+    assert result.metadata["acquisition_model_assumptions"][
+        "linked_sugar_partner_area_ratio"
+    ] == 1.0
+
+
+def test_linked_sugar_basis_is_one_equal_area_two_phosphorus_component():
+    fid, dwell, f0, _ = _synthetic_p31_fid()
+    data = SpectralData(fid, dwell, f0)
+    config = P31RedoxConfig(
+        ppm_range=(-10.4, -6.5), include_linked_nucleotide_sugars=True,
+    )
+    names, spectra = _component_spectra(
+        data, config, fid.size, 0.0, 10.0, 2.0, 0.0, 0.0, 0.0,
+        linked_nucleotide_sugar_extra_linewidth_hz=4.0,
+    )
+    assert names.count("UDP_sugars_linked") == 1
+    sugar_fid = np.fft.ifft(np.fft.ifftshift(spectra[-1]))
+    expected = _linked_nucleotide_sugar(data.time_axis(), f0, config, 14.0)
+    np.testing.assert_allclose(sugar_fid, expected, atol=1e-12)
+    # Integrated complex spectral area equals the t=0 weight sum. The NAD
+    # and pooled sugar components each carry two phosphorus weights; alpha
+    # ATP carries one. This is bookkeeping, not an NOE calibration.
+    component_fids = np.fft.ifft(np.fft.ifftshift(spectra, axes=1), axis=1)
+    np.testing.assert_allclose(component_fids[:, 0], [2.0, 2.0, 1.0, 2.0], atol=1e-12)
 
 
 def test_linked_nucleotide_sugar_model_requires_partner_window():

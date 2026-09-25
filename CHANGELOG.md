@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Documented the idealized proton-decoupled redox basis, the absence of
+  WALTZ-4 pulse-train/partial-acquisition simulation and metabolite-specific
+  NOE or saturation correction, and the equal-response assumption linking
+  the sugar partners. Added machine-readable acquisition-model assumptions
+  to fit metadata without changing numerical fitting or defaults.
+- Added an explicit bounded residual-phase example and distinguished hard
+  parameter bounds from probabilistic priors, conditional fit precision from
+  model validity, and single-spectrum ratio checks from CSI workflow QC.
 - Added experimental non-NAD phase estimation from Pi, PCr, gamma-ATP and
   beta-ATP, with explicit SNR and phase-residual QC.
 - Added native-grid phase correction and an anchor-informed NAD-region helper
