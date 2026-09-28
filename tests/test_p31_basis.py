@@ -34,7 +34,9 @@ def test_bundled_basis_is_present_and_unchanged():
     assert metadata["acquired_points"] == 1024
     assert metadata["model_points"] == 2048
     assert metadata["lcmodel_stored_ndatab"] == 4096
-    assert "NOPARK" not in json.dumps(metadata).upper()
+    serialized = json.dumps(metadata).lower()
+    assert "/volumes/" not in serialized
+    assert "randomisation" not in serialized
 
 
 def test_bundled_basis_loads_with_expected_components_and_grid():

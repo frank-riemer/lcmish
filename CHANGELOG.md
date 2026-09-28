@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+- Documented the idealized proton-decoupled redox basis, the absence of
+  WALTZ-4 pulse-train/partial-acquisition simulation and metabolite-specific
+  NOE or saturation correction, and the equal-response assumption linking
+  the sugar partners. Added machine-readable acquisition-model assumptions
+  to fit metadata without changing numerical fitting or defaults.
+- Added an explicit bounded residual-phase example and distinguished hard
+  parameter bounds from probabilistic priors, conditional fit precision from
+  model validity, and single-spectrum ratio checks from CSI workflow QC.
+- Added experimental non-NAD phase estimation from Pi, PCr, gamma-ATP and
+  beta-ATP, with explicit SNR and phase-residual QC.
+- Added native-grid phase correction and an anchor-informed NAD-region helper
+  that records the complete phase audit alongside the fit.
+- Added an optional alpha-ATP-only phase nuisance so that local alpha-ATP model
+  mismatch need not be absorbed by a large, unconstrained NAD-window phase
+  ramp. The existing `fit_p31_redox()` behavior remains unchanged by default.
+- Added synthetic regression tests for global phase recovery, NAD-window
+  independence, apparent-redox recovery and alpha-ATP phase separation.
+- Added an opt-in pooled nucleotide-sugar sensitivity model for
+  proton-decoupled data. Equal-area phosphorus-phosphorus doublets near -9.8
+  and -8.2 ppm share one non-negative amplitude, so the separated partner can
+  constrain the contribution overlapping NAD.
+- Added a separate linked-sugar linewidth nuisance, explicit validation that
+  the fit window includes both partners, and synthetic recovery tests. Legacy
+  redox defaults and the original unlinked nuisance model remain unchanged.
+
 ## 0.3.1 — 2026-08-28
 
 - Fixed a phase-domain defect in the general linear-combination fitter. LCMish
@@ -68,5 +95,5 @@ First public-facing LCMish release, retaining the internal PyLCModel version lin
 - Added table, CSV, checkpoint and figure outputs.
 - Added an LCModel-style (but clearly LCMish-labelled) one-page PDF summary with spectrum, fit, residuals, parameters and metabolite table; PDF replaces any need for PostScript as the default human-readable report.
 - Fixed NumPy compatibility by using `numpy.trapezoid` when available, with a fallback for older NumPy versions. No monkey-patching of NumPy is required in user scripts.
-- Removed study-specific paths, randomisation data, voxel choices and NOPARK-specific batch logic from the public core.
+- Removed study-specific paths, randomisation data, voxel choices and batch logic from the public core.
 - Added explicit licensing, third-party provenance and AI-assisted development disclosures.

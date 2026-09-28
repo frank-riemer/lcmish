@@ -238,8 +238,186 @@ The selected fit is the trial with the smallest optimisation cost. Visual inspec
 The generic `fit_p31_redox()` function accepts a single preprocessed complex
 spectrum and fits a literature-constrained local model over the upfield
 alpha-ATP/NAD region. The result is labelled an **apparent** NAD+/NADH ratio.
-It is not returned as reportable when NADH is boundary-limited or the configured
-quality criteria fail.
+Its ratio property returns NaN when either NAD component is boundary-limited.
+The single-spectrum result does not automatically gate the ratio on optimizer
+success or percentage error: inspect these diagnostics explicitly. The masked
+CSI wrapper additionally gates its ratio on the configured workflow QC.
+
+For acquisitions where the local NAD window tries to explain model mismatch
+with a large phase ramp, `fit_p31_redox_anchor_informed()` offers a more
+constrained experimental route. It first estimates zero- and first-order phase
+from Pi, PCr, gamma-ATP and beta-ATP, explicitly excluding both the NAD window
+and alpha-ATP. It then applies only a tightly bounded residual NAD phase and,
+by default, fits a separate alpha-ATP phase offset. The anchor audit and the
+corrected spectrum are returned with the fit:
+
+```python
+from lcmish import fit_p31_redox_anchor_informed
+
+anchored = fit_p31_redox_anchor_informed(data)
+print(anchored.phase.phase0_deg)
+print(anchored.phase.phase1_deg_per_ppm)
+print(anchored.phase.phase_residual_rms_deg)
+print(anchored.fit.apparent_redox_ratio)
+```
+
+This separation is intentional: non-NAD resonances constrain the acquisition
+phase, while the optional alpha-ATP offset represents a local acquisition or
+model nuisance rather than allowing the NAD components themselves to rotate
+freely. A good-looking local fit is not evidence that NADH is identifiable.
+Use residual-bootstrap intervals, component uncertainty and boundary occupancy,
+and treat the result as exploratory whenever those diagnostics are poor.
+Sequence-specific acquisition-delay correction must still be performed and
+validated upstream. The historical `fit_p31_redox()` defaults are unchanged.
+
+For proton-decoupled data, an additional experimental sensitivity model can
+link the two phosphorus-phosphorus doublets of a pooled UDP-sugar component.
+The signal near -9.8 ppm then constrains the same component's contribution
+under NAD near -8.2 ppm:
+
+```python
+from lcmish import P31RedoxConfig, fit_p31_redox_anchor_informed
+
+linked = P31RedoxConfig(
+    ppm_range=(-10.4, -6.5),
+    include_linked_nucleotide_sugars=True,
+)
+result = fit_p31_redox_anchor_informed(data, linked)
+```
+
+The paired component is normalized to two phosphorus nuclei and is disabled by
+default. It is a pooled pseudo-doublet sensitivity model, not a validated
+separation of UDP-glucose, UDP-galactose, UDP-GlcNAc and UDP-GalNAc. A fitted
+extra linewidth at its configured boundary, structured residual near -9.8 ppm,
+phase-bound occupancy, or unstable NADH amplitude indicates that the pooled
+model is inadequate. Those cases require a sequence-specific multi-sugar basis
+or stronger independently validated prior information; they must not be
+resolved by selecting the phase constraint that gives a preferred redox ratio.
+
+### Proton decoupling and NOE assumptions
+
+**This is an idealized proton-decoupled signal model, not a WALTZ-4 pulse
+simulation or an NOE-calibrated concentration assay.** The adaptation consists
+of decoupled spectral patterns, an optional linked sugar component and explicit
+phase constraints. It does not introduce measured signal-enhancement factors.
+The fitter accepts preprocessed spectra; it does not infer whether decoupling
+or NOE was used from acquisition headers.
+
+WALTZ-4 proton irradiation reduces proton-phosphorus splitting. It does not
+remove phosphorus-phosphorus coupling. Accordingly, the model omits explicit
+proton coupling but retains the field-dependent NAD+ AB quartet, an NADH
+singlet, the alpha-ATP phosphorus doublet and the paired sugar doublets.
+The NAD+ pattern follows the two-phosphorus model of
+[Lu et al.](https://doi.org/10.1002/mrm.24859).
+
+For a protocol with WALTZ-4 during the first half of signal acquisition and
+NOE preparation before phosphorus excitation, the same idealized patterns are
+used across the entire acquired FID. There is **no explicit decoupling on/off
+transition**, RF pulse-train calculation, or simulation of decoupling efficiency.
+Fitted linewidths and limited phase adjustments can accommodate some observed
+shape differences, but are not a physical correction for those effects.
+[Peeters et al.](https://doi.org/10.1002/nbm.4169) describe 3-T brain acquisition
+with WALTZ4 and NOE and measure metabolite-dependent signal enhancement; their
+measurements are not imported as correction factors here.
+
+NOE increases signal, potentially by different amounts for different molecules
+and phosphorus sites. The fitter applies **no metabolite-specific NOE, T1
+saturation, excitation-profile or receive-response correction**. Its NAD+ and
+NADH basis weights each sum to two phosphorus nuclei. This makes their
+coefficients comparable as molecular amounts only under equal effective
+response, or after an independently justified calibration. Schematically,
+
+```text
+fitted NAD+/NADH = concentration NAD+/NADH × (response_NAD+ / response_NADH)
+```
+
+Here `response` includes enhancement and acquisition sensitivity, not only NOE.
+Longitudinal comparisons require that relative response to be stable across
+visits and groups, as well as an adequate spectral decomposition. A common
+signal scaling cancels in a single-spectrum ratio; metabolite-specific
+enhancement does not. The result is therefore an **apparent spectral NAD+/NADH
+ratio**, not a calibrated free cytosolic or mitochondrial redox ratio. NAD+
+means oxidized NAD, not NADP(H).
+
+### How the nucleotide-sugar partner constrains the NAD overlap
+
+With `include_linked_nucleotide_sugars=True` and the example window above,
+the real-spectrum fit jointly covers -10.4 to -6.5 ppm. One pooled component
+combines two doublets centered
+at -9.8 and -8.2 ppm, with phosphorus-phosphorus J = 20.5 Hz. Each doublet has
+weights `[0.5, 0.5]`, so the two partners have equal modeled integrated area
+and the whole component represents two phosphorus nuclei:
+
+```text
+sugar signal = one nonnegative amplitude × (partner at -9.8 + partner at -8.2)
+```
+
+The less-overlapped -9.8 ppm signal constrains the amount that can be assigned
+to sugars under NAD at -8.2 ppm. Both regions contribute to the joint fit;
+the -9.8 ppm peak is not measured and subtracted in a separate first step.
+There is no independent sugar amplitude under NAD. The partners also share
+the common frequency shift and sugar linewidth (NAD linewidth plus a fitted
+extra width, bounded by default to 0–20 Hz), and the same phase law. Equal
+modeled area does not require equal real-channel peak heights after phasing.
+
+This linkage assumes comparable effective response of the two sugar phosphorus
+sites, including NOE, saturation and excitation effects. Their relative
+enhancement is neither measured nor fitted. The component is a pooled
+approximation, not a separate assay of UDP-Glc, UDP-Gal, UDP-GlcNAc and
+UDP-GalNAc. [Ren et al.](https://doi.org/10.1002/nbm.4511) showed at 7 T that
+the -9.8 ppm sugar pattern informs interpretation of the overlapping -8.2 ppm
+signal; that supports the linkage concept, not validation of this simplified
+3-T model. Structured residuals or boundary-limited sugar linewidth require
+further model checking.
+
+### Explicit residual-phase sensitivity settings
+
+The anchor-informed helper uses Pi, PCr, gamma-ATP and beta-ATP to estimate
+phase outside NAD. Its default residual limits are tight: +/-1 degree and
++/-0.5 degree/ppm. A broader, bounded sensitivity configuration is explicit:
+
+```python
+from lcmish import P31AnchorPhaseConfig, P31RedoxConfig
+from lcmish import fit_p31_redox_anchor_informed
+
+linked = P31RedoxConfig(
+    ppm_range=(-10.4, -6.5),
+    include_linked_nucleotide_sugars=True,
+    baseline_order=2,
+)
+bounded_phase = P31AnchorPhaseConfig(
+    residual_phase0_bounds_deg=(-30.0, 30.0),
+    residual_phase1_bounds_deg_per_ppm=(-40.0, 40.0),
+)
+# data must already have validated reconstruction, acquisition-delay
+# correction and PCr frequency alignment. Do not correct the delay twice.
+result = fit_p31_redox_anchor_informed(
+    data, linked, bounded_phase, fit_alpha_phase_offset=True, nfft=4096,
+)
+print(result.fit.metadata["acquisition_model_assumptions"])
+```
+
+These are **hard parameter bounds**, not a probabilistic regularization prior
+and not validated universal settings. The helper takes residual limits from
+`P31AnchorPhaseConfig`, overriding the phase bounds in `P31RedoxConfig`.
+An alpha-ATP-only phase offset is a nuisance term, not a WALTZ-4 simulation.
+Check phase and linewidth boundary hits, residual structure and sensitivity to
+tighter/wider limits; do not select limits to obtain a preferred ratio.
+Without residual bootstrapping, the reported component percentage errors are
+conditional on the nonlinear fit parameters. Neither those errors nor a good
+fit establish that NADH is uniquely determined. Residual bootstrapping also
+does not test acquisition-model correctness or between-participant uncertainty.
+
+For data without proton decoupling, validate a coupled, acquisition-matched
+basis before using these approximations; simply widening the linewidth is not
+a validated replacement. Data without NOE do not need an NOE enhancement
+factor, but saturation, excitation and spectral overlap still require checking.
+There is no automatic switch for either acquisition condition in this fitter.
+Synthetic tests verify implementation and recovery under its assumptions, not
+the validity of those assumptions for a particular experiment. Existing fit
+defaults and LCModel-compatible file I/O are unchanged by this update.
+
+### Masked 2-D CSI workflow
 
 `fit_p31_csi_redox()` is a deliberately narrower convenience workflow. It
 expects reconstructed complex data with shape `(row, column, time)`, an explicit
@@ -247,6 +425,14 @@ Boolean voxel mask, and study-specific QC thresholds. It calculates a robust
 PCr-SNR map, excludes masked voxels that fail the configured threshold, aligns
 and phases retained voxels individually, combines them coherently, and fits the
 local NAD model with an optional nucleotide-sugar sensitivity analysis.
+
+That automatic sensitivity comparison uses the historical **unlinked** sugar
+term. When passing a linked-sugar config to this CSI wrapper, set
+`run_nucleotide_sugar_sensitivity=False`; the linked and unlinked components
+are mutually exclusive. The CSI wrapper does not apply the non-NAD anchor
+helper automatically. To use that helper, prepare the spectrum first with
+`prepare_p31_csi_redox()` and pass its `.combined` spectrum to
+`fit_p31_redox_anchor_informed()` after validating the upstream correction.
 
 ```python
 from lcmish import (
