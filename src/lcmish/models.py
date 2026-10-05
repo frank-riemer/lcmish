@@ -145,7 +145,7 @@ class GroupConfig:
 
 @dataclass(frozen=True)
 class FitConfig:
-    """Numerical configuration for one spectral fit."""
+    """Numerical fit settings; domain is complex, real, imag or magnitude."""
 
     ppm_range: tuple[float, float]
     zero_fill_factor: int = 2
@@ -171,8 +171,9 @@ class FitConfig:
 class FitResult:
     """Result of a single LCMish fit.
 
-    ``data``, ``fit``, ``baseline``, ``residual`` and ``components`` contain
-    the phase-corrected real display channel.  Complex-domain fits also retain
+    ``data``, ``fit``, ``baseline`` and ``residual`` contain the selected
+    display channel (real for a complex fit). Magnitude component curves are
+    interference-aware allocations, not isolated absolute spectra. Complex fits retain
     the corresponding imaginary display channel in the optional ``*_imag``
     fields so that phase quality and complex residuals remain inspectable.
     """

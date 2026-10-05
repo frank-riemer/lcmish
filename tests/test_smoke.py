@@ -126,7 +126,7 @@ def test_invalid_fit_domain_is_rejected():
     data = SpectralData(np.ones(16, dtype=complex), 0.001, 51.7)
     basis = BasisSet(["PCr"], np.ones((1, 16), dtype=complex))
     with np.testing.assert_raises_regex(ValueError, "fit_domain"):
-        fit_spectrum(data, basis, FitConfig(ppm_range=(-2, 2), fit_domain="magnitude"))
+        fit_spectrum(data, basis, FitConfig(ppm_range=(-2, 2), fit_domain="power"))
 
 
 def test_multistart_returns_audit():

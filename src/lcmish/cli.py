@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from pathlib import Path
 
 from .config import p31_brain_config, p31_brain_grouped_config
@@ -32,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ppm-min", type=float, required=True)
     p.add_argument("--ppm-max", type=float, required=True)
     p.add_argument("--grouped-31p", action="store_true", help="Use the grouped 31P starting configuration")
+    p.add_argument("--fit-domain", choices=("complex", "real", "imag", "magnitude", "both", "imaginary", "mag"), default="complex", help="Fit both channels, real only, imaginary only or magnitude")
     p.add_argument("--out", type=Path, default=Path("lcmish_fit"))
     return p
 
@@ -51,7 +53,7 @@ def main(argv=None) -> int:
         reference_ppm=data.reference_ppm,
     )
     factory = p31_brain_grouped_config if args.grouped_31p else p31_brain_config
-    config = factory((args.ppm_min, args.ppm_max))
+    config = replace(factory((args.ppm_min, args.ppm_max)), fit_domain=args.fit_domain)
     result = fit_spectrum(data, basis, config)
     prefix = args.out
     result.save_csv(prefix.with_suffix(".csv"))

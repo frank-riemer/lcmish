@@ -1,7 +1,30 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-10-05
 
+- Unified the general and redox domain selectors: real, imaginary, complex
+  (both channels) and coherent magnitude, with aliases. Existing general
+  complex and redox real defaults are retained. Complex redox results retain
+  both channels and bootstrap paired residuals.
+- Added nonlinear coherent-magnitude fitting, with an additive scalar baseline,
+  amplitude-Jacobian uncertainty and interference-aware component allocations.
+  Common phase is not estimated from magnitude and magnitude-noise bias is not
+  corrected. Omitted coherent tails can bias local magnitude redox fits.
+- Exposed fitting-domain choice in the CLI and prepared proton example.
+- Consolidated the README introduction, put redox first, removed segmented bold
+  emphasis and moved detailed workflows to the examples guide. Redox phase
+  estimation and linked sugars are documented as part of the same codebase.
+
+- Refocused the README on lightweight native multinuclear frequency-domain
+  fitting without an external fitting binary or proprietary runtime. Corrected
+  installation and general complex-fitting claims, and documented preprocessing,
+  spectral references, water handling, configuration and MRSI array safeguards.
+- Added direct MATLAB complex-vector and prepared NIfTI-MRS proton routes, a
+  runnable prepared 1H example and regression tests for its input contract.
+  These are API examples, not validation of proton acquisitions or absolute
+  concentration calibration.
+- Corrected the synthetic 31P example's oscillator sign to match the documented
+  `ppm = reference_ppm - frequency_hz / transmitter_mhz` convention.
 - Documented the idealized proton-decoupled redox basis, the absence of
   WALTZ-4 pulse-train/partial-acquisition simulation and metabolite-specific
   NOE or saturation correction, and the equal-response assumption linking
