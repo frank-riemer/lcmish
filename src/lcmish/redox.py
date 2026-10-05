@@ -19,6 +19,7 @@ from scipy.optimize import least_squares, lsq_linear
 
 from .compat import trapezoid
 from .models import CSIData, SpectralData
+from .domains import domain_design, magnitude_model, normalise_fit_domain, project_spectrum
 
 
 @dataclass(frozen=True)
@@ -68,8 +69,10 @@ class P31RedoxConfig:
     initial_linked_nucleotide_sugar_extra_linewidth_hz: float = 4.0
     bootstrap_repeats: int = 0
     random_seed: int = 20260821
+    fit_domain: str = "real"
 
     def __post_init__(self) -> None:
+        normalise_fit_domain(self.fit_domain)
         if (
             self.include_nucleotide_sugar_nuisance
             and self.include_linked_nucleotide_sugars
@@ -191,6 +194,11 @@ class P31RedoxResult:
     relative_residual: float
     bootstrap_amplitudes: np.ndarray | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    data_imag: np.ndarray | None = None
+    fit_imag: np.ndarray | None = None
+    baseline_imag: np.ndarray | None = None
+    residual_imag: np.ndarray | None = None
+    components_imag: dict[str, np.ndarray] = field(default_factory=dict)
 
     def amplitude(self, name: str) -> float:
         return float(self.amplitudes[self.names.index(name)])
@@ -441,15 +449,22 @@ def fit_p31_redox(
     *,
     nfft: int | None = None,
 ) -> P31RedoxResult:
-    """Fit alpha-ATP, NAD+ and NADH in the local upfield alpha-ATP region."""
+    """Fit local NAD/alpha-ATP in real, imaginary, complex or magnitude mode.
+
+    Magnitude uses a coherent complex sum plus an additive scalar polynomial
+    baseline. Common phase is not estimable in this mode; no magnitude-noise
+    bias correction is applied. The historical real-channel default is retained.
+    """
     config = config or P31RedoxConfig()
+    domain = normalise_fit_domain(config.fit_domain)
     nfft = int(nfft or max(4096, 4 * data.npoints))
     ppm_full = data.ppm_axis(nfft)
     spectrum_full = data.spectrum(nfft)
     lo, hi = sorted(config.ppm_range)
     mask = (ppm_full >= lo) & (ppm_full <= hi)
     ppm = ppm_full[mask]
-    y = spectrum_full.real[mask]
+    observed = spectrum_full[mask]
+    y = project_spectrum(observed, domain)
     if ppm.size < 32:
         raise ValueError("The redox fitting window contains fewer than 32 points")
     x = (ppm - ppm.mean()) / max(float(np.ptp(ppm)) / 2.0, np.finfo(float).eps)
@@ -458,105 +473,99 @@ def fit_p31_redox(
     )
     cache: dict[str, Any] = {}
 
-    def solve_linear(theta: np.ndarray, target: np.ndarray = y):
-        next_index = 6
-        linked_sugar_extra_linewidth_hz = 0.0
-        if config.include_linked_nucleotide_sugars:
-            linked_sugar_extra_linewidth_hz = theta[next_index]
-            next_index += 1
-        alpha_phase_offset_deg = (
-            theta[next_index] if config.fit_alpha_phase_offset else 0.0
-        )
-        names, spectra = _component_spectra(
-            data,
-            config,
-            nfft,
-            theta[0],
-            theta[1],
-            theta[2],
-            theta[3],
-            theta[4],
-            theta[5],
-            alpha_phase_offset_deg,
-            linked_sugar_extra_linewidth_hz,
-        )
-        component_matrix = spectra[:, mask].real.T
-        design = np.column_stack([component_matrix, baseline_columns])
-        nmet = len(names)
-        lower = np.r_[
-            np.zeros(nmet), np.full(baseline_columns.shape[1], -np.inf)
-        ]
-        linear = lsq_linear(
-            design,
-            target,
-            bounds=(lower, np.full(design.shape[1], np.inf)),
-            method="trf",
-        )
-        cache.update(names=names, design=design, linear=linear)
-        return design @ linear.x, linear
-
-    lower = np.array(
-        [
-            config.shift_bounds_ppm[0],
-            config.nad_linewidth_bounds_hz[0],
-            config.alpha_extra_linewidth_bounds_hz[0],
-            config.alpha_relative_shift_bounds_ppm[0],
-            config.phase0_bounds_deg[0],
-            config.phase1_bounds_deg_per_ppm[0],
-        ]
-    )
-    upper = np.array(
-        [
-            config.shift_bounds_ppm[1],
-            config.nad_linewidth_bounds_hz[1],
-            config.alpha_extra_linewidth_bounds_hz[1],
-            config.alpha_relative_shift_bounds_ppm[1],
-            config.phase0_bounds_deg[1],
-            config.phase1_bounds_deg_per_ppm[1],
-        ]
-    )
-    initial = np.array(
-        [
-            0.0,
-            config.initial_nad_linewidth_hz,
-            config.initial_alpha_extra_linewidth_hz,
-            0.0,
-            0.0,
-            0.0,
-        ]
-    )
+    keys = ["common_shift_ppm", "nad_linewidth_hz", "alpha_extra_linewidth_hz", "alpha_relative_shift_ppm", "phase0_deg", "phase1_deg_per_ppm"]
+    bounds = [config.shift_bounds_ppm, config.nad_linewidth_bounds_hz,
+              config.alpha_extra_linewidth_bounds_hz, config.alpha_relative_shift_bounds_ppm,
+              config.phase0_bounds_deg, config.phase1_bounds_deg_per_ppm]
+    initial = [0.0, config.initial_nad_linewidth_hz, config.initial_alpha_extra_linewidth_hz, 0.0, 0.0, 0.0]
+    if domain == "magnitude":
+        keys, bounds, initial = keys[:4], bounds[:4], initial[:4]
     if config.include_linked_nucleotide_sugars:
-        lower = np.r_[
-            lower,
-            config.linked_nucleotide_sugar_extra_linewidth_bounds_hz[0],
-        ]
-        upper = np.r_[
-            upper,
-            config.linked_nucleotide_sugar_extra_linewidth_bounds_hz[1],
-        ]
-        initial = np.r_[
-            initial,
-            config.initial_linked_nucleotide_sugar_extra_linewidth_hz,
-        ]
+        keys.append("linked_nucleotide_sugar_extra_linewidth_hz")
+        bounds.append(config.linked_nucleotide_sugar_extra_linewidth_bounds_hz)
+        initial.append(config.initial_linked_nucleotide_sugar_extra_linewidth_hz)
     if config.fit_alpha_phase_offset:
-        lower = np.r_[lower, config.alpha_phase_offset_bounds_deg[0]]
-        upper = np.r_[upper, config.alpha_phase_offset_bounds_deg[1]]
-        initial = np.r_[initial, config.initial_alpha_phase_offset_deg]
+        # Relative component phase affects interference even in magnitude mode.
+        keys.append("alpha_phase_offset_deg")
+        bounds.append(config.alpha_phase_offset_bounds_deg)
+        initial.append(config.initial_alpha_phase_offset_deg)
+    lower, upper = np.asarray(bounds, dtype=float).T
+    initial = np.asarray(initial, dtype=float)
+
+    def components(theta):
+        params = dict(zip(keys, theta[:len(keys)]))
+        names, spectra = _component_spectra(
+            data, config, nfft,
+            params["common_shift_ppm"], params["nad_linewidth_hz"],
+            params["alpha_extra_linewidth_hz"], params["alpha_relative_shift_ppm"],
+            params.get("phase0_deg", 0.0), params.get("phase1_deg_per_ppm", 0.0),
+            params.get("alpha_phase_offset_deg", 0.0),
+            params.get("linked_nucleotide_sugar_extra_linewidth_hz", 0.0),
+        )
+        return names, spectra[:, mask].T
+
+    def solve(theta: np.ndarray, target: np.ndarray):
+        names, metab = components(theta)
+        nmet, nbase = len(names), baseline_columns.shape[1]
+        if domain == "magnitude":
+            coefficients = theta[len(keys):]
+            prediction, baseline_curve, design, curves = magnitude_model(
+                metab, coefficients[:nmet], baseline_columns, coefficients[nmet:],
+            )
+            baseline_complex = baseline_curve.astype(complex)
+            curves_complex = curves.astype(complex)
+            fitted_complex = prediction.astype(complex)
+            linear_success = True
+        else:
+            design = domain_design(metab, baseline_columns, domain)
+            linear = lsq_linear(
+                design, target,
+                bounds=(np.r_[np.zeros(nmet), np.full(design.shape[1] - nmet, -np.inf)], np.full(design.shape[1], np.inf)),
+                method="trf",
+            )
+            coefficients = linear.x
+            prediction = design @ coefficients
+            linear_success = linear.success
+            if domain == "complex":
+                baseline_complex = baseline_columns @ coefficients[nmet:nmet+nbase] + 1j * baseline_columns @ coefficients[nmet+nbase:]
+                curves_complex = metab * coefficients[:nmet]
+                fitted_complex = curves_complex.sum(axis=1) + baseline_complex
+            else:
+                baseline_complex = (baseline_columns @ coefficients[nmet:]).astype(complex)
+                channel = metab.imag if domain == "imag" else metab.real
+                curves_complex = (channel * coefficients[:nmet]).astype(complex)
+                fitted_complex = prediction.astype(complex)
+        cache.update(names=names, design=design, coefficients=coefficients,
+                     baseline=baseline_complex, curves=curves_complex,
+                     fitted=fitted_complex, linear_success=linear_success)
+        return prediction
+
+    if domain == "magnitude":
+        seed_names, seed_metab = components(initial)
+        seed_design = domain_design(seed_metab, baseline_columns, domain)
+        seed = lsq_linear(seed_design, y, bounds=(
+            np.r_[np.zeros(len(seed_names)), np.full(baseline_columns.shape[1], -np.inf)],
+            np.full(seed_design.shape[1], np.inf),
+        )).x
+        initial = np.r_[initial, seed]
+        lower = np.r_[lower, np.zeros(len(seed_names)), np.full(baseline_columns.shape[1], -np.inf)]
+        upper = np.r_[upper, np.full(seed.size, np.inf)]
     nonlinear = least_squares(
-        lambda theta: solve_linear(theta)[0] - y,
-        initial,
-        bounds=(lower, upper),
-        max_nfev=180,
+        lambda theta: solve(theta, y) - y, initial, bounds=(lower, upper),
+        max_nfev=180, x_scale="jac" if domain == "magnitude" else 1.0,
     )
-    fitted, linear = solve_linear(nonlinear.x)
+    fitted = solve(nonlinear.x, y)
     names = cache["names"]
     design = cache["design"]
     nmet = len(names)
-    amplitudes = linear.x[:nmet]
-    baseline = baseline_columns @ linear.x[nmet:]
-    component_curves = design[:, :nmet].T * amplitudes[:, None]
+    coefficients = cache["coefficients"]
+    amplitudes = coefficients[:nmet].copy()
+    baseline_complex = cache["baseline"].copy()
+    component_curves = cache["curves"].copy()
+    fitted_complex = cache["fitted"].copy()
+    linear_success = cache["linear_success"]
     residual_values = y - fitted
-    dof = max(1, y.size - linear.x.size - nonlinear.x.size)
+    dof = max(1, y.size - coefficients.size - len(keys))
     noise_variance = float(residual_values @ residual_values / dof)
     covariance = noise_variance * np.linalg.pinv(design.T @ design)
     amplitude_se = np.sqrt(np.maximum(0.0, np.diag(covariance)[:nmet]))
@@ -566,20 +575,23 @@ def fit_p31_redox(
         rng = np.random.default_rng(config.random_seed)
         boot = np.full((config.bootstrap_repeats, nmet), np.nan)
         for index in range(config.bootstrap_repeats):
-            y_boot = fitted + rng.choice(
-                residual_values, size=residual_values.size, replace=True
-            )
-
-            def boot_solve(theta: np.ndarray):
-                return solve_linear(theta, y_boot)
-
+            if domain == "complex":
+                # Resample real/imaginary residual pairs together.
+                indices = rng.integers(0, ppm.size, size=ppm.size)
+                sampled = np.r_[residual_values[:ppm.size][indices], residual_values[ppm.size:][indices]]
+            else:
+                sampled = rng.choice(residual_values, size=residual_values.size, replace=True)
+            y_boot = fitted + sampled
             boot_nonlinear = least_squares(
-                lambda theta: boot_solve(theta)[0] - y_boot,
+                lambda theta: solve(theta, y_boot) - y_boot,
                 nonlinear.x,
                 bounds=(lower, upper),
                 max_nfev=100,
+                x_scale="jac" if domain == "magnitude" else 1.0,
             )
-            boot[index] = boot_solve(boot_nonlinear.x)[1].x[:nmet]
+            solve(boot_nonlinear.x, y_boot)
+            if boot_nonlinear.success and cache["linear_success"]:
+                boot[index] = cache["coefficients"][:nmet]
         amplitude_se = np.nanstd(boot, axis=0, ddof=1)
 
     crlb = np.full(nmet, np.inf)
@@ -594,24 +606,9 @@ def fit_p31_redox(
         np.linalg.norm(residual_values)
         / max(np.linalg.norm(y), np.finfo(float).eps)
     )
-    nonlinear_values = {
-        "common_shift_ppm": float(nonlinear.x[0]),
-        "nad_linewidth_hz": float(nonlinear.x[1]),
-        "alpha_extra_linewidth_hz": float(nonlinear.x[2]),
-        "alpha_relative_shift_ppm": float(nonlinear.x[3]),
-        "phase0_deg": float(nonlinear.x[4]),
-        "phase1_deg_per_ppm": float(nonlinear.x[5]),
-    }
-    next_index = 6
-    if config.include_linked_nucleotide_sugars:
-        nonlinear_values["linked_nucleotide_sugar_extra_linewidth_hz"] = float(
-            nonlinear.x[next_index]
-        )
-        next_index += 1
-    if config.fit_alpha_phase_offset:
-        nonlinear_values["alpha_phase_offset_deg"] = float(
-            nonlinear.x[next_index]
-        )
+    nonlinear_values = dict(zip(keys, map(float, nonlinear.x[:len(keys)])))
+    display_data = observed if domain == "complex" else y.astype(complex)
+    display_residual = display_data - fitted_complex
     return P31RedoxResult(
         names=names,
         amplitudes=amplitudes,
@@ -619,21 +616,32 @@ def fit_p31_redox(
         crlb_percent=crlb,
         nonlinear=nonlinear_values,
         ppm=ppm,
-        data=y,
-        fit=fitted,
-        baseline=baseline,
+        data=display_data.real,
+        fit=fitted_complex.real,
+        baseline=baseline_complex.real,
         components={
-            name: component_curves[index]
+            name: component_curves[:, index].real
             for index, name in enumerate(names)
         },
-        residual=residual_values,
-        success=bool(nonlinear.success and linear.success),
+        residual=display_residual.real,
+        success=bool(nonlinear.success and linear_success),
         message=str(nonlinear.message),
         cost=float(np.sum(residual_values**2)),
         fit_correlation=correlation,
         relative_residual=relative_residual,
         bootstrap_amplitudes=boot,
+        data_imag=display_data.imag if domain == "complex" else None,
+        fit_imag=fitted_complex.imag if domain == "complex" else None,
+        baseline_imag=baseline_complex.imag if domain == "complex" else None,
+        residual_imag=display_residual.imag if domain == "complex" else None,
+        components_imag={name: component_curves[:, index].imag for index, name in enumerate(names)} if domain == "complex" else {},
         metadata={
+            "fit_domain": domain,
+            "phase_estimated": domain != "magnitude",
+            "display_domain": "acquired complex spectrum" if domain == "complex" else domain,
+            "magnitude_model": "abs(coherent component sum) + additive scalar baseline" if domain == "magnitude" else None,
+            "component_display": "interference-aware magnitude allocation" if domain == "magnitude" else "selected spectral channel",
+            "magnitude_noise_correction": False,
             "model": "Lu_2014_field_specific_NAD_plus_AB_quartet_and_NADH_singlet",
             "experimental": True,
             "unedited_spectrum_warning": True,

@@ -10,6 +10,7 @@ from scipy.interpolate import BSpline
 from scipy.optimize import least_squares, lsq_linear
 
 from .models import BasisSet, FitAudit, FitConfig, FitResult, GroupConfig, SpectralData
+from .domains import magnitude_model, normalise_fit_domain, project_spectrum
 
 
 def _next_pow_two(n: int) -> int:
@@ -213,8 +214,8 @@ def _components_for_params(
 ) -> np.ndarray:
     """Return complex metabolite spectra in the acquired-data phase frame."""
     t = np.arange(nfft, dtype=float) * data.dwell_time_s
-    phase0 = np.deg2rad(params["phase0_deg"])
-    phase1 = np.deg2rad(params["phase1_deg_per_ppm"])
+    phase0 = np.deg2rad(params.get("phase0_deg", 0.0))
+    phase1 = np.deg2rad(params.get("phase1_deg_per_ppm", 0.0))
     pivot = data.reference_ppm
     phase = np.exp(1j * (phase0 + phase1 * (ppm - pivot)))
     matched_fids = _match_basis_time_grid(basis, data, nfft)
@@ -323,9 +324,9 @@ def _solve_linear_complex(y, metab, baseline, config: FitConfig):
 
 def fit_spectrum(data: SpectralData, basis: BasisSet, config: FitConfig) -> FitResult:
     """Fit one spectrum using nonlinear nuisance parameters and linear amplitudes."""
-    fit_domain = str(config.fit_domain).strip().lower()
-    if fit_domain not in {"complex", "real"}:
-        raise ValueError("fit_domain must be 'complex' or 'real'")
+    fit_domain = normalise_fit_domain(config.fit_domain)
+    if fit_domain == "magnitude" and not config.nonnegative_amplitudes:
+        raise ValueError("Magnitude fitting requires nonnegative_amplitudes=True")
     nfft = _next_pow_two(data.npoints * max(1, int(config.zero_fill_factor)))
     ppm_all = data.ppm_axis(nfft)
     spectrum_all = np.fft.fftshift(np.fft.fft(data.fid, n=nfft))
@@ -335,16 +336,29 @@ def fit_spectrum(data: SpectralData, basis: BasisSet, config: FitConfig) -> FitR
         raise ValueError("Fit ppm range contains too few spectral points")
     ppm = ppm_all[mask]
     y_complex = spectrum_all[mask]
-    y = y_complex if fit_domain == "complex" else y_complex.real
+    y = project_spectrum(y_complex, fit_domain)
     baseline = _bspline_matrix(ppm, max(5, int(config.baseline_knots)))
 
     keys, x0, lower, upper, _active_groups = _parameter_spec(config, basis)
     group_by_name = _group_map(config.groups, basis.names)
+    if fit_domain == "magnitude":
+        # Common phase cancels in |sum| and cannot be estimated from magnitude.
+        keep = np.array([not key.startswith("phase") for key in keys])
+        keys = [key for key, active in zip(keys, keep) if active]
+        x0, lower, upper = x0[keep], lower[keep], upper[keep]
+        seed_metab = _components_for_params(
+            dict(zip(keys, x0)), data=data, basis=basis, nfft=nfft,
+            ppm=ppm_all, group_by_name=group_by_name,
+        )[mask]
+        seed_coeff, _ = _solve_linear_real(y, np.abs(seed_metab), baseline, config)
+        x0 = np.r_[x0, seed_coeff]
+        lower = np.r_[lower, np.zeros(basis.ncomponents), np.full(baseline.shape[1], -np.inf)]
+        upper = np.r_[upper, np.full(seed_coeff.size, np.inf)]
 
     cache: dict[str, object] = {}
 
     def evaluate(x):
-        params = dict(zip(keys, map(float, x)))
+        params = dict(zip(keys, map(float, x[:len(keys)])))
         metab_all = _components_for_params(params, data=data, basis=basis, nfft=nfft, ppm=ppm_all, group_by_name=group_by_name)
         metab = metab_all[mask]
         if fit_domain == "complex":
@@ -356,8 +370,17 @@ def fit_spectrum(data: SpectralData, basis: BasisSet, config: FitConfig) -> FitR
             cache["target"] = target
             cache["pred_complex"] = pred_complex
             cache["baseline_complex"] = baseline_complex
+        elif fit_domain == "magnitude":
+            coeff = x[len(keys):]
+            pred, base_curve, design, component_curves = magnitude_model(
+                metab, coeff[:basis.ncomponents], baseline, coeff[basis.ncomponents:],
+            )
+            residual = y - pred
+            cache["magnitude_baseline"] = base_curve
+            cache["magnitude_components"] = component_curves
         else:
-            coeff, design = _solve_linear_real(y, metab.real, baseline, config)
+            channel = metab.imag if fit_domain == "imag" else metab.real
+            coeff, design = _solve_linear_real(y, channel, baseline, config)
             pred = design @ coeff
             residual = y - pred
         cache["params"] = params
@@ -365,10 +388,15 @@ def fit_spectrum(data: SpectralData, basis: BasisSet, config: FitConfig) -> FitR
         cache["coeff"] = coeff
         cache["design"] = design
         cache["pred"] = pred
+        cache["residual"] = residual
+        if fit_domain == "magnitude" and config.baseline_lambda > 0:
+            penalty = np.sqrt(config.baseline_lambda) * _second_difference(baseline.shape[1]) @ coeff[basis.ncomponents:]
+            return np.r_[residual, penalty]
         return residual
 
-    optimum = least_squares(evaluate, x0, bounds=(lower, upper), max_nfev=config.max_nfev, method="trf")
-    residual = evaluate(optimum.x)
+    optimum = least_squares(evaluate, x0, bounds=(lower, upper), max_nfev=config.max_nfev, method="trf", x_scale="jac" if fit_domain == "magnitude" else 1.0)
+    evaluate(optimum.x)
+    residual = np.asarray(cache["residual"])
     params = cache["params"]
     metab = np.asarray(cache["metab"])
     coeff = np.asarray(cache["coeff"])
@@ -376,8 +404,8 @@ def fit_spectrum(data: SpectralData, basis: BasisSet, config: FitConfig) -> FitR
     pred = np.asarray(cache["pred"])
     n_metab = basis.ncomponents
     amps = coeff[:n_metab]
-    phase0 = np.deg2rad(params["phase0_deg"])
-    phase1 = np.deg2rad(params["phase1_deg_per_ppm"])
+    phase0 = np.deg2rad(params.get("phase0_deg", 0.0))
+    phase1 = np.deg2rad(params.get("phase1_deg_per_ppm", 0.0))
     phase = np.exp(
         1j * (phase0 + phase1 * (ppm - float(data.reference_ppm)))
     )
@@ -396,6 +424,14 @@ def fit_spectrum(data: SpectralData, basis: BasisSet, config: FitConfig) -> FitR
         }
         components = {name: value.real for name, value in component_complex.items()}
         components_imag = {name: value.imag for name, value in component_complex.items()}
+    elif fit_domain == "magnitude":
+        data_display = y.astype(np.complex128)
+        fit_display = pred.astype(np.complex128)
+        baseline_display = np.asarray(cache["magnitude_baseline"], dtype=np.complex128)
+        residual_display = residual.astype(np.complex128)
+        curves = np.asarray(cache["magnitude_components"])
+        components = {name: curves[:, i] for i, name in enumerate(basis.names)}
+        components_imag = {}
     else:
         base_coeff = coeff[n_metab:]
         baseline_fit = baseline @ base_coeff
@@ -404,12 +440,12 @@ def fit_spectrum(data: SpectralData, basis: BasisSet, config: FitConfig) -> FitR
         baseline_display = baseline_fit.astype(np.complex128)
         residual_display = residual.astype(np.complex128)
         components = {
-            name: metab[:, i].real * amps[i]
+            name: (metab[:, i].imag if fit_domain == "imag" else metab[:, i].real) * amps[i]
             for i, name in enumerate(basis.names)
         }
         components_imag = {}
 
-    target_size = 2 * y_complex.size if fit_domain == "complex" else y.size
+    target_size = y.size
     dof = max(1, target_size - design.shape[1] - len(keys))
     sigma2 = float(np.dot(residual, residual) / dof)
     try:
@@ -433,14 +469,21 @@ def fit_spectrum(data: SpectralData, basis: BasisSet, config: FitConfig) -> FitR
         nonlinear=params,
         success=bool(optimum.success),
         message=str(optimum.message),
-        cost=float(optimum.cost),
+        cost=float(residual @ residual / 2),
         metadata={
             "nfft": int(nfft),
             "fit_ppm_range": [float(lo), float(hi)],
             "fit_domain": fit_domain,
             "display_domain": (
-                "phase-corrected complex spectrum" if fit_domain == "complex" else "legacy unphased real spectrum"
+                "phase-corrected complex spectrum" if fit_domain == "complex"
+                else "legacy unphased real spectrum" if fit_domain == "real"
+                else "acquired imaginary spectrum" if fit_domain == "imag"
+                else "magnitude spectrum"
             ),
+            "phase_estimated": fit_domain != "magnitude",
+            "magnitude_model": "abs(coherent component sum) + additive scalar baseline" if fit_domain == "magnitude" else None,
+            "component_display": "interference-aware magnitude allocation" if fit_domain == "magnitude" else "selected spectral channel",
+            "magnitude_noise_correction": False,
             "phase_convention": (
                 "phase parameters rotate the basis into the acquired-data frame; "
                 "the inverse rotation is applied to data and fit for display"

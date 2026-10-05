@@ -1,594 +1,113 @@
 # LCMish
 
-**Transparent linear-combination modelling for magnetic resonance spectroscopy.**
+Lightweight, native multinuclear spectral fitting in Python.
 
-LCMish is a Python framework for fitting MR spectra with basis spectra, smooth baselines and a focused set of nonlinear nuisance parameters. It originated as an internal project called PyLCModel and retains that project's version lineage. The current public release is **0.3.0**.
+LCMish was developed to meet a need for a lightweight Python fitter that models MR spectra in the frequency domain with supplied basis signals and a fitted smooth baseline. Multinuclear modelling is native to the core: it uses the acquisition's frequency, dwell time and chemical-shift reference rather than assuming proton data. The same general API accepts ¹H, ³¹P and other nuclei with an acquisition-matched basis and configuration.
 
-The name is deliberate. LCMish performs **LCM-like** fitting. It is inspired by the general linear-combination modelling approach used by LCModel, but it is **not LCModel**, not an official port, and not a drop-in numerical replacement. Analyses that require LCModel-equivalent behaviour should use LCModel and validate the complete workflow accordingly.
+A central feature is ³¹P NAD-region/redox fitting, including field-dependent NAD+ and NADH models, non-NAD phase estimation, an optional alpha-ATP phase term and linked nucleotide-sugar modelling. Whole-spectrum linear-combination fitting and the specialised redox model are available through the same Python package.
 
-> **Research-software status:** alpha. LCMish is intended for method development, transparent validation and research workflows with appropriate independent quality control.
+LCMish runs with NumPy, SciPy and Matplotlib, without a proprietary fitting-software licence, MATLAB runtime or external fitting executable. MATLAB-prepared complex vectors, NIfTI-MRS and LCModel-style RAW are supported input routes. The numerical components are exposed so that models, baselines and fitting assumptions can be inspected and adapted.
 
-## Why does this exist?
+LCMish is independent of LCModel: it is not an official port or a drop-in numerical replacement. Research-software status is alpha. Development and validation have concentrated on ³¹P; native multinuclear support is not a claim of validated performance for every nucleus, sequence or high-resolution ¹H-MRSI acquisition.
 
-LCMish was developed to make spectroscopy fitting easier to inspect, modify, visualise and test. Its numerical components are exposed in Python so that modelling assumptions and implementation choices can be evaluated directly.
+## Core capabilities
 
-The immediate emphasis has been **³¹P MRS**, including PCr, Pi, ATP and NAD-region fitting, although the core fitter is nucleus-agnostic. The project provides a transparent environment for developing and testing linear-combination models alongside established spectroscopy software.
+- ³¹P NAD-region/redox fitting with NAD+ AB-quartet and NADH models, non-NAD phase estimation, alpha-ATP phase handling and optional linked nucleotide sugars.
+- Selectable fitting of both real and imaginary channels (`complex`), real only (`real`), imaginary only (`imag`) or magnitude (`magnitude`) in both general and redox fitters.
+- Whole-spectrum linear-combination fitting with a regularised cubic B-spline baseline; a polynomial baseline for the local redox model.
+- Frequency shift, zero- and first-order phase, Lorentzian/Gaussian broadening and optional shared metabolite-group parameters.
+- Nonnegative amplitudes, multistart fitting and conditional amplitude uncertainty; residual bootstrap is available for redox.
+- Direct complex-array input, NIfTI-MRS, LCModel-style RAW/BASIS, and optional Siemens Twix/DICOM CSI readers.
+- Masked 2-D ³¹P CSI preparation with voxel QC, PCr alignment, phasing and coherent combination.
+- A provenance-documented experimental Siemens 3 T brain ³¹P basis.
+- Component tables, complex residuals, figures and one-page PDF reports.
 
-## What version 0.3 does
-
-- fits the **real part of a zero-filled spectrum** using supplied basis spectra;
-- uses separable / variable-projection-style optimisation, with linear amplitudes and baseline coefficients solved inside a nonlinear optimisation;
-- supports global frequency shift, zero-order phase, first-order phase, Lorentzian broadening and Gaussian broadening;
-- supports optional metabolite **groups** with shared shift and linewidth terms;
-- supports non-negative metabolite amplitudes;
-- uses a cubic B-spline baseline with second-difference regularisation;
-- reads **NIfTI-MRS** `.nii` / `.nii.gz` as the preferred vendor-neutral spectroscopy input;
-- reads common LCModel-style `.RAW` files;
-- reads LCModel-style `.BASIS` files with LCModel-compatible component scaling, shifting and basis/data grid matching;
-- provides multistart fitting;
-- reports conditional amplitude standard errors and deliberately labels the corresponding percentages **CRLB-like**;
-- provides ³¹P-oriented starting configurations;
-- writes CSV, text-table, checkpoint, fit-figure and **single-page PDF summary** outputs;
-- offers optional Siemens Twix access through `pymapvbvd`;
-- provides an experimental local 31P NAD-region model for NAD+, NADH and
-  neighbouring alpha-ATP, including nucleotide-sugar sensitivity analysis;
-- provides an explicitly masked 2-D CSI convenience route with configurable
-  voxel and fit QC, PCr alignment, phase correction and coherent combination;
-- includes a ready-to-use, provenance-documented experimental Siemens 3 T brain
-  31P basis in LCModel-style `.BASIS` form;
-- supports current NumPy releases while retaining compatibility with older supported versions.
-
-## Example output and cross-fitter context
-
-LCMish produces a single-page fit report containing the observed spectrum, fitted model, baseline, residual, component estimates, uncertainty measures and fit diagnostics. The complete example is available as [`examples/LCMish_synthetic_fit_summary.pdf`](examples/LCMish_synthetic_fit_summary.pdf).
-
-<p align="center">
-  <img src="docs/images/lcmish-fit-report-preview.png" width="620" alt="Rendered preview of the LCMish single-page synthetic fit report">
-</p>
-
-*Synthetic example report generated by LCMish 0.3.0.*
-
-The following example shows an LCMish fit to a deidentified, phase-corrected in-vivo ³¹P spectrum formed by averaging eight retained voxels. The fit spans +10 to −20 ppm and uses shared ATP-group shift and linewidth terms. The trace is included to illustrate the fitted model and residual produced by the current workflow; it is not presented as cross-fitter validation.
-
-![Full-range LCMish fit and residual for a deidentified phase-corrected eight-voxel mean in-vivo 31P spectrum](docs/images/lcmish-in-vivo-example.png)
-
-*Deidentified eight-voxel in-vivo mean, fitted from +10 to −20 ppm and display-normalised to the maximum observed signal.*
-
-## What it does *not* yet do
-
-LCMish 0.3 is not numerically equivalent to LCModel. Important behaviour still requiring implementation and/or systematic validation includes, among other things:
-
-- LCModel's full prior model and concentration-ratio constraints;
-- automatic regularisation selection equivalent to LCModel;
-- the full LCModel lineshape model;
-- exact LCModel `%SD` / CRLB calculations;
-- macromolecule and lipid simulation controls;
-- water scaling and absolute concentration calibration;
-- eddy-current correction;
-- complete `CONTROL`-file compatibility;
-- byte-for-byte reproduction of LCModel output.
-
-Accordingly, the uncertainty figures currently produced by LCMish are **conditional, CRLB-like estimates**, not LCModel `%SD`.
+The general fitter defaults to `complex`; redox retains its `real` default. Aliases `both`, `imaginary` and `mag` are accepted. Magnitude fitting uses the magnitude of the coherent component sum, not the sum of component magnitudes. Common phase is not estimated in that mode, and magnitude-noise bias is not corrected. See [fitting modes and examples](examples/README.md#fitting-modes).
 
 ## Installation
 
-Install the 0.3.0 wheel directly from the GitHub release:
+Python 3.10 or newer is required. Install the 0.4.0 wheel, including the optional NIfTI reader:
 
 ```bash
-python -m pip install https://github.com/frank-riemer/lcmish/releases/download/v0.3.0/lcmish-0.3.0-py3-none-any.whl
+python -m pip install "lcmish[nifti] @ https://github.com/frank-riemer/lcmish/releases/download/v0.4.0/lcmish-0.4.0-py3-none-any.whl"
 ```
 
-The redox module, masked 2-D CSI workflow, Siemens readers and starter basis are
-all included in 0.3.0. Optional input dependencies can be requested from the
-same wheel:
-
-```bash
-python -m pip install "lcmish[nifti] @ https://github.com/frank-riemer/lcmish/releases/download/v0.3.0/lcmish-0.3.0-py3-none-any.whl"
-python -m pip install "lcmish[siemens] @ https://github.com/frank-riemer/lcmish/releases/download/v0.3.0/lcmish-0.3.0-py3-none-any.whl"
-```
-
-For development, clone the repository and install it in editable mode:
+Alternatively, work directly from the source repository:
 
 ```bash
 git clone https://github.com/frank-riemer/lcmish.git
 cd lcmish
-python -m pip install -e ".[test,nifti,siemens]"
+python -m pip install -e ".[nifti]"
+```
+
+For Siemens readers, add the `siemens` extra; for tests, add `test`:
+
+```bash
+python -m pip install -e ".[nifti,siemens,test]"
 python -m pytest
 ```
 
-## Input formats
+The core does not require the optional readers when passing a complex vector directly. All redox and phase-estimation features are part of this codebase; no separate feature-specific installation is needed.
 
-### NIfTI-MRS — preferred
+## Preprocessing and fitting responsibilities
 
-[NIfTI-MRS](https://github.com/wtclarke/mrs_nifti_standard) is the preferred vendor-neutral input format. Scanner raw formats evolve, whereas a defined interchange standard provides the fitter with a stable input contract.
+“Before fitting” means preparing the complex data in your chosen reconstruction/preprocessing software, which may be MATLAB. Reading a file is not the same as correcting an acquisition.
 
-LCMish reads the complex time-domain signal, dwell time, spectrometer frequency, resonant nucleus, spatial affine and NIfTI-MRS JSON metadata. If `SpecFreqChemShift` is present it is used as the spectral-centre reference; it can always be overridden explicitly. NIfTI-MRS is a storage and interoperability standard: conversion does not by itself phase the spectrum, combine coils, resolve sequence-specific phase cycling, or validate a vendor reconstruction.
+| Task | General fitter | ³¹P CSI/redox route |
+|---|---|---|
+| Scanner reconstruction and sequence phase cycling | Prepare before fitting | Prepare before fitting |
+| Acquisition-delay and receiver-gain correction, when needed | Apply before fitting | Apply before fitting |
+| Coil combination and water-based eddy-current correction | Apply before fitting | Apply before fitting |
+| Frequency alignment and phasing | Fits residual shift/phase | CSI preparation aligns PCr and phases voxels; redox phase estimation can use non-NAD peaks |
+| Spectral baseline | Fits a smooth spline | Fits a local polynomial |
+| Water-referenced/absolute concentration scaling | Separate calibration after fitting | Separate calibration after fitting |
 
-A normal preprocessed SVS file is deliberately simple:
+The fit's residual phase/frequency parameters do not replace validated reconstruction. Water can support coil weighting, eddy-current correction and concentration referencing, but these are separate operations. Fitted amplitudes are not automatically absolute concentrations. Details are in the [input and workflow guide](examples/README.md).
 
-```python
-import lcmish
+## Examples and workflows
 
-data = lcmish.read("subject.nii.gz")
-print(data.metadata["nucleus"])
-print(data.dwell_time_s, data.transmitter_mhz)
-```
+The [examples guide](examples/README.md) contains code and explanations for:
 
-NIfTI-MRS can also contain MRSI voxels, uncombined coils, dynamics, edit states and other higher dimensions. LCMish **does not silently average or coil-combine these**. If more than one FID is present, select it explicitly:
+- [Loading NIfTI-MRS or RAW](examples/README.md#nifti-mrs-and-raw).
+- [Loading just a complex MATLAB vector](examples/README.md#complex-vectors-from-matlab), with metadata supplied separately or saved alongside it.
+- [Choosing real, imaginary, complex or magnitude fitting](examples/README.md#fitting-modes).
+- [Whole-spectrum fitting and configuration](examples/README.md#whole-spectrum-fitting).
+- [Prepared ¹H and voxelwise MRSI](examples/README.md#1h-and-voxelwise-mrsi).
+- [Redox fitting, non-NAD phase estimation and linked sugars](examples/README.md#redox-fitting-and-phase-estimation).
+- [Masked 2-D CSI and Siemens readers](examples/README.md#masked-csi-and-siemens-readers).
 
-```python
-data = lcmish.read(
-    "mrsi_or_dynamic.nii.gz",
-    index=(x, y, z, dim5, dim6),
-)
-```
+GE P-files/ScanArchive are not decoded directly. Reconstruct them with a validated external reader, preprocess the complex FIDs, then use the MATLAB-vector, NIfTI-MRS or RAW route. NIfTI conversion is not mandatory.
 
-The index follows the stored non-spectral dimensions: `x, y, z`, then dimensions 5–7 if present. In ordinary workflows it is preferable to perform coil combination, alignment, averaging and edit-state arithmetic in a preprocessing package and provide LCMish with the resulting single-FID NIfTI-MRS file. This keeps scientific preprocessing decisions explicit and separate from file I/O.
+## Example output
 
-LCMish uses **NiBabel** for NIfTI I/O. For strict format validation and manipulation of higher dimensions, the dedicated [`nifti-mrs`](https://pypi.org/project/nifti-mrs/) tools remain an excellent companion.
+LCMish reports the spectrum, model, baseline, residuals, fitted amplitudes and diagnostics. An [example PDF](examples/LCMish_synthetic_fit_summary.pdf) illustrates the report layout.
 
-### LCModel-style RAW
+<p align="center">
+  <img src="docs/images/lcmish-fit-report-preview.png" width="620" alt="LCMish one-page fit report">
+</p>
 
-`.RAW` remains supported for compatibility and validation work. Because RAW files do not always provide enough acquisition metadata consistently, dwell time and transmitter frequency are explicit:
+An in-vivo ³¹P example shows the model and residual for a phase-corrected mean of eight retained voxels, fitted from +10 to −20 ppm:
 
-```python
-data = lcmish.read(
-    "subject.RAW",
-    dwell_time_s=1 / 3000,
-    transmitter_mhz=51.7,
-    reference_ppm=0.0,
-)
-```
+![LCMish in-vivo 31P fit and residual](docs/images/lcmish-in-vivo-example.png)
 
-### Scanner raw data
+These illustrations are not cross-fitter validation.
 
-Siemens Twix access remains available separately through `read_twix()` and `pymapvbvd`. It returns the raw complex array without guessing which dimensions are voxels, coils or averages. This is intentional.
+## Basis sets and limitations
 
-LCMish does **not** currently parse GE P-files (`.7`) or GE ScanArchive directly. GE raw formats have changed across software generations, and maintaining robust compatibility requires dedicated development and validation. Upstream conversion or reconstruction to NIfTI-MRS is the preferred route. The same principle applies to other vendor-specific raw formats.
+Use a basis matched to nucleus, field/frequency, sequence, timing and complex spectral convention. LCModel-compatible file/grid handling does not adapt an inappropriate physical basis to your acquisition.
 
-## A small example
+The package includes an experimental proton-decoupled Siemens 3 T brain ³¹P basis and a JSON provenance sidecar. It is not a universal basis and is not a proton basis. Private development bases are not redistributed; third-party basis licences remain separate from the software licence. See [basis details](examples/README.md#basis-and-acquisition-assumptions) and [THIRD_PARTY.md](THIRD_PARTY.md).
 
-```python
-import lcmish
-from lcmish import read_basis, fit_spectrum, p31_brain_config
+LCMish does not reproduce LCModel's complete priors, automatic regularisation, lineshape model or %SD calculations. Its reported errors are conditional, CRLB-like estimates, not LCModel %SD. Water scaling, absolute calibration and eddy-current correction are not automatic.
 
-data = lcmish.read("subject.nii.gz")
-
-basis = read_basis(
-    "my31p.BASIS",
-    transmitter_mhz=data.transmitter_mhz,
-    reference_ppm=data.reference_ppm,
-)
-
-result = fit_spectrum(
-    data,
-    basis,
-    p31_brain_config((-20.0, 10.0)),
-)
-
-result.save_csv("fit.csv")
-result.save_pdf("fit.pdf", title="LCMish 31P fit")
-result.plot("fit.png")
-print(result.nonlinear)
-print(result.summary_rows())
-```
-
-The default `fit_domain="complex"` uses both real and imaginary spectral
-channels. Phase parameters rotate the basis into the acquired-data frame; the
-inverse rotation is then applied consistently to the data, fit, baseline and
-components for the reported real spectrum. The corresponding imaginary
-channels are retained on the `FitResult` for QC. The historical real-only
-projection can be reproduced with `FitConfig(..., fit_domain="real")`, but is
-not recommended for new quantitative analyses.
-
-### The one-page summary
-
-LCMish can write a single-page PDF summary containing the spectrum, fit, residual and key numerical results:
-
-```python
-result.save_pdf("fit.pdf", title="LCMish 31P fit")
-```
-
-The report contains the observed spectrum, fitted model, baseline, residual, component amplitudes, conditional standard errors, CRLB-like percentages, nonlinear fit parameters and basic fit diagnostics. The layout is familiar to LCModel users, while every page is labelled **LCMish** and explicitly states that it is not LCModel output.
-
-The command-line interface writes this PDF automatically as `<output>.pdf`, alongside the machine-readable outputs. No PostScript dependency is required.
-
-A rendered synthetic example is included at [`examples/LCMish_synthetic_fit_summary.pdf`](examples/LCMish_synthetic_fit_summary.pdf).
-
-The command-line equivalent for NIfTI-MRS is:
-
-```bash
-lcmish subject.nii.gz my31p.BASIS \
-  --ppm-min -20 --ppm-max 10 \
-  --out subject_fit
-```
-
-For LCModel-style RAW input, add `--dwell`, `--f0` and, where appropriate, `--ref-ppm`. For a multi-FID NIfTI-MRS file, `--index x y z ...` makes the selection explicit.
-
-## ³¹P grouped fitting
-
-For ³¹P work, `p31_brain_grouped_config()` provides a starting model with shared nonlinear terms for sensible component groups where the supplied basis names permit it. It is a starting configuration, not a revealed truth. Inspect it, change it and report what you used.
-
-```python
-from lcmish import p31_brain_grouped_config
-
-config = p31_brain_grouped_config((-20.0, 10.0))
-```
-
-For difficult spectra, multistart fitting is available:
-
-```python
-from lcmish import fit_spectrum_multistart
-
-starts = (
-    {},
-    {"initial_phase0_deg": -8.0, "initial_phase1_deg_per_ppm": -3.0},
-    {"initial_phase0_deg":  8.0, "initial_phase1_deg_per_ppm":  3.0},
-    {"initial_lorentzian_hz": 1.0, "initial_gaussian_hz": 12.0},
-)
-
-audit = fit_spectrum_multistart(data, basis, config, starts=starts)
-result = audit.best
-```
-
-The selected fit is the trial with the smallest optimisation cost. Visual inspection and the reported diagnostics remain necessary.
-
-## Experimental NAD-region fitting and masked 2-D CSI workflow
-
-The generic `fit_p31_redox()` function accepts a single preprocessed complex
-spectrum and fits a literature-constrained local model over the upfield
-alpha-ATP/NAD region. The result is labelled an **apparent** NAD+/NADH ratio.
-Its ratio property returns NaN when either NAD component is boundary-limited.
-The single-spectrum result does not automatically gate the ratio on optimizer
-success or percentage error: inspect these diagnostics explicitly. The masked
-CSI wrapper additionally gates its ratio on the configured workflow QC.
-
-For acquisitions where the local NAD window tries to explain model mismatch
-with a large phase ramp, `fit_p31_redox_anchor_informed()` offers a more
-constrained experimental route. It first estimates zero- and first-order phase
-from Pi, PCr, gamma-ATP and beta-ATP, explicitly excluding both the NAD window
-and alpha-ATP. It then applies only a tightly bounded residual NAD phase and,
-by default, fits a separate alpha-ATP phase offset. The anchor audit and the
-corrected spectrum are returned with the fit:
-
-```python
-from lcmish import fit_p31_redox_anchor_informed
-
-anchored = fit_p31_redox_anchor_informed(data)
-print(anchored.phase.phase0_deg)
-print(anchored.phase.phase1_deg_per_ppm)
-print(anchored.phase.phase_residual_rms_deg)
-print(anchored.fit.apparent_redox_ratio)
-```
-
-This separation is intentional: non-NAD resonances constrain the acquisition
-phase, while the optional alpha-ATP offset represents a local acquisition or
-model nuisance rather than allowing the NAD components themselves to rotate
-freely. A good-looking local fit is not evidence that NADH is identifiable.
-Use residual-bootstrap intervals, component uncertainty and boundary occupancy,
-and treat the result as exploratory whenever those diagnostics are poor.
-Sequence-specific acquisition-delay correction must still be performed and
-validated upstream. The historical `fit_p31_redox()` defaults are unchanged.
-
-For proton-decoupled data, an additional experimental sensitivity model can
-link the two phosphorus-phosphorus doublets of a pooled UDP-sugar component.
-The signal near -9.8 ppm then constrains the same component's contribution
-under NAD near -8.2 ppm:
-
-```python
-from lcmish import P31RedoxConfig, fit_p31_redox_anchor_informed
-
-linked = P31RedoxConfig(
-    ppm_range=(-10.4, -6.5),
-    include_linked_nucleotide_sugars=True,
-)
-result = fit_p31_redox_anchor_informed(data, linked)
-```
-
-The paired component is normalized to two phosphorus nuclei and is disabled by
-default. It is a pooled pseudo-doublet sensitivity model, not a validated
-separation of UDP-glucose, UDP-galactose, UDP-GlcNAc and UDP-GalNAc. A fitted
-extra linewidth at its configured boundary, structured residual near -9.8 ppm,
-phase-bound occupancy, or unstable NADH amplitude indicates that the pooled
-model is inadequate. Those cases require a sequence-specific multi-sugar basis
-or stronger independently validated prior information; they must not be
-resolved by selecting the phase constraint that gives a preferred redox ratio.
-
-### Proton decoupling and NOE assumptions
-
-**This is an idealized proton-decoupled signal model, not a WALTZ-4 pulse
-simulation or an NOE-calibrated concentration assay.** The adaptation consists
-of decoupled spectral patterns, an optional linked sugar component and explicit
-phase constraints. It does not introduce measured signal-enhancement factors.
-The fitter accepts preprocessed spectra; it does not infer whether decoupling
-or NOE was used from acquisition headers.
-
-WALTZ-4 proton irradiation reduces proton-phosphorus splitting. It does not
-remove phosphorus-phosphorus coupling. Accordingly, the model omits explicit
-proton coupling but retains the field-dependent NAD+ AB quartet, an NADH
-singlet, the alpha-ATP phosphorus doublet and the paired sugar doublets.
-The NAD+ pattern follows the two-phosphorus model of
-[Lu et al.](https://doi.org/10.1002/mrm.24859).
-
-For a protocol with WALTZ-4 during the first half of signal acquisition and
-NOE preparation before phosphorus excitation, the same idealized patterns are
-used across the entire acquired FID. There is **no explicit decoupling on/off
-transition**, RF pulse-train calculation, or simulation of decoupling efficiency.
-Fitted linewidths and limited phase adjustments can accommodate some observed
-shape differences, but are not a physical correction for those effects.
-[Peeters et al.](https://doi.org/10.1002/nbm.4169) describe 3-T brain acquisition
-with WALTZ4 and NOE and measure metabolite-dependent signal enhancement; their
-measurements are not imported as correction factors here.
-
-NOE increases signal, potentially by different amounts for different molecules
-and phosphorus sites. The fitter applies **no metabolite-specific NOE, T1
-saturation, excitation-profile or receive-response correction**. Its NAD+ and
-NADH basis weights each sum to two phosphorus nuclei. This makes their
-coefficients comparable as molecular amounts only under equal effective
-response, or after an independently justified calibration. Schematically,
-
-```text
-fitted NAD+/NADH = concentration NAD+/NADH × (response_NAD+ / response_NADH)
-```
-
-Here `response` includes enhancement and acquisition sensitivity, not only NOE.
-Longitudinal comparisons require that relative response to be stable across
-visits and groups, as well as an adequate spectral decomposition. A common
-signal scaling cancels in a single-spectrum ratio; metabolite-specific
-enhancement does not. The result is therefore an **apparent spectral NAD+/NADH
-ratio**, not a calibrated free cytosolic or mitochondrial redox ratio. NAD+
-means oxidized NAD, not NADP(H).
-
-### How the nucleotide-sugar partner constrains the NAD overlap
-
-With `include_linked_nucleotide_sugars=True` and the example window above,
-the real-spectrum fit jointly covers -10.4 to -6.5 ppm. One pooled component
-combines two doublets centered
-at -9.8 and -8.2 ppm, with phosphorus-phosphorus J = 20.5 Hz. Each doublet has
-weights `[0.5, 0.5]`, so the two partners have equal modeled integrated area
-and the whole component represents two phosphorus nuclei:
-
-```text
-sugar signal = one nonnegative amplitude × (partner at -9.8 + partner at -8.2)
-```
-
-The less-overlapped -9.8 ppm signal constrains the amount that can be assigned
-to sugars under NAD at -8.2 ppm. Both regions contribute to the joint fit;
-the -9.8 ppm peak is not measured and subtracted in a separate first step.
-There is no independent sugar amplitude under NAD. The partners also share
-the common frequency shift and sugar linewidth (NAD linewidth plus a fitted
-extra width, bounded by default to 0–20 Hz), and the same phase law. Equal
-modeled area does not require equal real-channel peak heights after phasing.
-
-This linkage assumes comparable effective response of the two sugar phosphorus
-sites, including NOE, saturation and excitation effects. Their relative
-enhancement is neither measured nor fitted. The component is a pooled
-approximation, not a separate assay of UDP-Glc, UDP-Gal, UDP-GlcNAc and
-UDP-GalNAc. [Ren et al.](https://doi.org/10.1002/nbm.4511) showed at 7 T that
-the -9.8 ppm sugar pattern informs interpretation of the overlapping -8.2 ppm
-signal; that supports the linkage concept, not validation of this simplified
-3-T model. Structured residuals or boundary-limited sugar linewidth require
-further model checking.
-
-### Explicit residual-phase sensitivity settings
-
-The anchor-informed helper uses Pi, PCr, gamma-ATP and beta-ATP to estimate
-phase outside NAD. Its default residual limits are tight: +/-1 degree and
-+/-0.5 degree/ppm. A broader, bounded sensitivity configuration is explicit:
-
-```python
-from lcmish import P31AnchorPhaseConfig, P31RedoxConfig
-from lcmish import fit_p31_redox_anchor_informed
-
-linked = P31RedoxConfig(
-    ppm_range=(-10.4, -6.5),
-    include_linked_nucleotide_sugars=True,
-    baseline_order=2,
-)
-bounded_phase = P31AnchorPhaseConfig(
-    residual_phase0_bounds_deg=(-30.0, 30.0),
-    residual_phase1_bounds_deg_per_ppm=(-40.0, 40.0),
-)
-# data must already have validated reconstruction, acquisition-delay
-# correction and PCr frequency alignment. Do not correct the delay twice.
-result = fit_p31_redox_anchor_informed(
-    data, linked, bounded_phase, fit_alpha_phase_offset=True, nfft=4096,
-)
-print(result.fit.metadata["acquisition_model_assumptions"])
-```
-
-These are **hard parameter bounds**, not a probabilistic regularization prior
-and not validated universal settings. The helper takes residual limits from
-`P31AnchorPhaseConfig`, overriding the phase bounds in `P31RedoxConfig`.
-An alpha-ATP-only phase offset is a nuisance term, not a WALTZ-4 simulation.
-Check phase and linewidth boundary hits, residual structure and sensitivity to
-tighter/wider limits; do not select limits to obtain a preferred ratio.
-Without residual bootstrapping, the reported component percentage errors are
-conditional on the nonlinear fit parameters. Neither those errors nor a good
-fit establish that NADH is uniquely determined. Residual bootstrapping also
-does not test acquisition-model correctness or between-participant uncertainty.
-
-For data without proton decoupling, validate a coupled, acquisition-matched
-basis before using these approximations; simply widening the linewidth is not
-a validated replacement. Data without NOE do not need an NOE enhancement
-factor, but saturation, excitation and spectral overlap still require checking.
-There is no automatic switch for either acquisition condition in this fitter.
-Synthetic tests verify implementation and recovery under its assumptions, not
-the validity of those assumptions for a particular experiment. Existing fit
-defaults and LCModel-compatible file I/O are unchanged by this update.
-
-### Masked 2-D CSI workflow
-
-`fit_p31_csi_redox()` is a deliberately narrower convenience workflow. It
-expects reconstructed complex data with shape `(row, column, time)`, an explicit
-Boolean voxel mask, and study-specific QC thresholds. It calculates a robust
-PCr-SNR map, excludes masked voxels that fail the configured threshold, aligns
-and phases retained voxels individually, combines them coherently, and fits the
-local NAD model with an optional nucleotide-sugar sensitivity analysis.
-
-That automatic sensitivity comparison uses the historical **unlinked** sugar
-term. When passing a linked-sugar config to this CSI wrapper, set
-`run_nucleotide_sugar_sensitivity=False`; the linked and unlinked components
-are mutually exclusive. The CSI wrapper does not apply the non-NAD anchor
-helper automatically. To use that helper, prepare the spectrum first with
-`prepare_p31_csi_redox()` and pass its `.combined` spectrum to
-`fit_p31_redox_anchor_informed()` after validating the upstream correction.
-
-```python
-from lcmish import (
-    CSIData,
-    P31CSIRedoxQCConfig,
-    fit_p31_csi_redox,
-)
-
-csi = CSIData(fids, dwell_time_s, transmitter_mhz)
-qc = P31CSIRedoxQCConfig(
-    pcr_snr_min=10.0,
-    min_retained_voxels=3,
-    local_fit_correlation_min=0.85,
-    local_relative_residual_max=0.55,
-)
-result = fit_p31_csi_redox(csi, study_specific_mask, qc)
-print(result.qc_pass, result.qc_reasons)
-print(result.apparent_redox_ratio)
-```
-
-The route was designed for 2-D 31P-CSI after study-specific anatomical voxel
-selection. LCMish does not infer mask anatomy or scanner orientation. Use with
-single-voxel data, other field strengths, localization schemes, scanners or
-masking strategies may require adaptation and independent validation. See
-`examples/p31_2d_csi_redox.py` for a complete synthetic example. Cohort-level
-composites, participant bootstrap and treatment-label permutation tests remain
-study-analysis responsibilities rather than general LCMish functions. Passing
-the convenience workflow's QC does not by itself validate participant-level
-redox quantification; studies using group composites should prepare each scan
-with `prepare_p31_csi_redox()`, construct the prespecified composites in their
-analysis code, and then apply `fit_p31_redox()`.
-
-## Basis sets and redistribution
-
-LCMish can **read** LCModel-style `.BASIS` files. That does not mean every basis file may be redistributed.
-
-Version 0.2.2 follows LCModel's basis-input conventions for `NDATAB`, `TRAMP/(VOLUME*CONC)` scaling, `ISHIFT`, the 4.65-ppm carrier-grid correction, unitary inverse-FFT normalization and basis/data bandwidth matching. It also preserves narrow-band basis signal over LCModel's internal `NDATA=2*NUNFIL` model duration. This is LCModel-compatible basis handling; it is not a claim that the complete LCMish fitter is numerically equivalent to LCModel.
-
-This repository therefore does **not** ship the private/internal ³¹P basis sets used during development. Before distributing any basis set, its provenance and redistribution terms must be established. The BSD licence for LCMish covers the LCMish code and does not re-license third-party spectra.
-
-### Bundled experimental brain 31P basis
-
-LCMish 0.3 includes a ready-to-use, provenance-clean basis named
-`LCMish_Brain_31P_Haukeland_Siemens3T_1024.BASIS`. It describes a representative
-proton-decoupled Siemens 3 T 31P CSI-FID acquisition at Haukeland University
-Hospital. Its metadata contain no trial or participant identifiers:
-
-- 1024 acquired complex points;
-- 0.5 ms dwell time (2000 Hz spectral width);
-- 49.891996 MHz 31P transmitter frequency;
-- PCr referenced to 0 ppm.
-
-The basis retains 2048 time-domain model points. An exported LCModel-style file
-therefore uses `NDATAB=4096`, following LCModel's internal-duration convention;
-this does not mean that the acquisition contained 4096 points.
-
-```python
-from lcmish import load_p31_brain_basis
-
-basis = load_p31_brain_basis()
-```
-
-The basis includes PE, PC, extracellular and intracellular Pi, GPE, GPC, PCr,
-alpha/beta/gamma ATP, NAD+ and NADH. Proton-decoupled monophosphate and
-phosphodiester signals are represented as singlets; ATP retains its 31P-31P
-couplings; NAD+ uses a field-dependent AB quartet. UDPG, other nucleotide
-sugars, 2,3-DPG and the broad membrane-phospholipid background are deliberately
-not included in version 0.1.0 because their inclusion requires adequately
-supported spectral models and prior constraints.
-
-This is an **experimental reference basis**, not a universal brain basis.
-Chemical shifts are starting values, Pi is pH-dependent, and use with another
-sequence, scanner, field strength, tissue or decoupling scheme requires
-independent validation. The accompanying JSON sidecar records the acquisition
-grid, assumptions, component list and primary literature references.
-
-The `.BASIS` file and its JSON provenance sidecar are distributed in both the
-wheel and source archive. Their integrity and expected peak positions are
-checked by the test suite.
-
-See [`THIRD_PARTY.md`](THIRD_PARTY.md) for licence, provenance and redistribution information.
-
-## Relationship to LCModel
-
-LCModel was developed by **Stephen Provencher**. Its source code has been released separately under a BSD 3-Clause licence. LCMish is an independent Python project for exploring and validating linear-combination MRS fitting. It does not include the LCModel source or executable and is not endorsed by the LCModel author or maintainers.
-
-Compatibility with LCModel-style file formats is intended to make validation easier, particularly direct comparison of the same data and basis information across fitting implementations.
-
-An ongoing development goal is to expand the regression suite comparing LCMish with established fitting tools on synthetic and real spectra. Visual comparisons are accompanied by numerical evaluation wherever the models can be matched appropriately.
-
-### v0.2.2 basis validation
-
-The corrected basis path was checked against a locally compiled LCModel reference and FSL-MRS 2.4.0 using a matched 12-component ³¹P synthetic mixture with deliberately different basis and data grids. LCModel recovered every PCr-relative ratio to the precision displayed in its coordinate output; LCMish and FSL-MRS supplied with the corrected arrays recovered the input ratios to approximately `1e-7` or better.
-
-FSL-MRS's direct reader for the tested LCModel `.BASIS` file produced an approximately 4.65-ppm carrier offset, so it was not used as the basis-import oracle. This finding concerns that file and reader path, not the general correctness of the FSL-MRS fitter.
-
-On a deidentified real ³¹P spectrum, the three fitters still produced materially different estimates for several overlapping components. The v0.2.2 validation therefore supports LCModel-compatible **basis handling**, not LCModel-equivalent real-data quantification. Baseline behavior, priors, staged optimization, lineshape constraints and uncertainty estimation remain distinct.
-
-## Development and AI assistance
-
-Early versions were developed through human–AI pair programming between **Frank Riemer** and **OpenAI's ChatGPT**.
-
-ChatGPT contributed code generation, refactoring, documentation and test scaffolding. Scientific direction, modelling decisions, validation, review and responsibility for releasing the software remain human responsibilities.
-
-LCMish is therefore described as **AI-assisted**. Contributions are expected to include appropriate tests and validation evidence regardless of how the code was produced.
-
-See [`AUTHORS.md`](AUTHORS.md) for the formal credit statement.
-
-## Validation philosophy
-
-The order of operations is:
-
-1. make the model inspectable;
-2. test it on known synthetic cases;
-3. compare fitted amplitudes, shifts, phases, linewidths, baselines and residuals against established software;
-4. quantify and investigate disagreement;
-5. only then use new behaviour for biological inference.
-
-For ³¹P work, particularly NAD-region fitting, validation should include sensitivity to basis composition, baseline placement, linewidth, phase, spectral registration and metabolite grouping. Separating NAD⁺ and NADH because the optimiser returned two numbers is not, on its own, evidence that the experiment contained enough information to distinguish them.
-
-## NumPy compatibility
-
-Internal PyLCModel 0.2.1-era analysis scripts needed a temporary compatibility shim because newer NumPy versions removed `np.trapz`. LCMish fixes this in the package itself: numerical integration uses `numpy.trapezoid` where available and falls back to `numpy.trapz` for older supported versions.
-
-User scripts therefore do not need a compatibility shim for this API change.
+For ³¹P, particularly NAD-region fitting, check sensitivity to basis composition, baseline, linewidth, phase, spectral alignment and grouping. Two fitted NAD coefficients alone do not establish that NAD+ and NADH are identifiable. The reported redox quantity is an apparent spectral ratio, not a calibrated free cytosolic or mitochondrial redox ratio. Proton-decoupling, NOE and relative acquisition response require appropriate interpretation; [model assumptions](examples/README.md#basis-and-acquisition-assumptions) explain the boundaries.
 
 ## Reproducibility
 
-If you use LCMish in a paper, please report at minimum:
+Report the software version/commit and basis, then describe settings or processing that differ from the documented defaults: fitting mode, window, constraints, baseline, grouping, calibration and QC. Save the effective configuration with results rather than copying a long list of defaults into a manuscript.
 
-- LCMish version;
-- acquisition nucleus and field strength;
-- basis-set provenance/version;
-- fit ppm range;
-- metabolite grouping;
-- bounds on shifts, phase and linewidth;
-- baseline spacing/regularisation;
-- amplitude constraints;
-- multistart strategy, if used;
-- QC and exclusion criteria;
-- whether reported uncertainty is the current conditional CRLB-like estimate.
+## Credit, licence and contributions
 
-Reporting the effective configuration is preferred to stating only that default settings were used, because defaults may change between releases.
+LCMish began as PyLCModel and was developed through human–AI pair programming between Frank Riemer and OpenAI's ChatGPT. Scientific decisions, validation and release responsibility remain human responsibilities. See [AUTHORS.md](AUTHORS.md).
 
-## Licence
-
-LCMish is released under the **BSD 3-Clause License**. See [`LICENSE`](LICENSE).
-
-That licence applies to LCMish code. Third-party basis sets, scanner data, example data obtained elsewhere and external software retain their own licences and terms. See [`THIRD_PARTY.md`](THIRD_PARTY.md).
-
-## Contributing
-
-Contributions, comparisons, bug reports and validation results are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-Bug reports should contain enough information to reproduce the issue, including relevant input metadata, configuration and observed output where redistribution permits.
-
----
-
-**LCMish 0.3.0**.
+LCMish uses the BSD 3-Clause [licence](LICENSE); third-party inputs retain their own terms. Contributions and validation comparisons are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).

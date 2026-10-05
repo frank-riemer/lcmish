@@ -145,7 +145,9 @@ def save_pdf_report(
     ax_spec.set_title("Observed spectrum and fitted model", fontsize=9.5, loc="left")
 
     ax_res = fig.add_subplot(grid[2, :], sharex=ax_spec)
-    ax_res.plot(ppm, residual, linewidth=0.75, label="real residual")
+    domain = result.metadata.get("fit_domain", "complex")
+    channel = "real" if domain == "complex" else domain
+    ax_res.plot(ppm, residual, linewidth=0.75, label=f"{channel} residual")
     if result.residual_imag is not None:
         ax_res.plot(
             ppm,
@@ -159,7 +161,7 @@ def save_pdf_report(
     ax_res.set_xlim(float(np.max(ppm)), float(np.min(ppm)))
     ax_res.set_ylabel("residual")
     ax_res.set_xlabel("chemical shift (ppm)")
-    ax_res.set_title("Residual", fontsize=9.5, loc="left")
+    ax_res.set_title(f"Residual ({domain} fit)", fontsize=9.5, loc="left")
 
     ax_sep = fig.add_subplot(grid[3, :])
     ax_sep.axis("off")

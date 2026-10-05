@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from dataclasses import replace
 
 from lcmish.redox import _component_spectra
 
@@ -135,13 +136,15 @@ def test_local_redox_fit_recovers_synthetic_amplitudes():
     assert assumptions["linked_sugar_partner_area_ratio"] is None
 
 
-def test_linked_nucleotide_sugar_fit_uses_both_phosphate_regions():
+@pytest.mark.parametrize("domain", ["real", "imag", "complex"])
+def test_linked_nucleotide_sugar_fit_uses_both_phosphate_regions(domain):
     rng = np.random.default_rng(181)
     fid, dwell, f0, _ = _synthetic_p31_fid()
     config = P31RedoxConfig(
         ppm_range=(-10.4, -6.5),
         baseline_order=1,
         include_linked_nucleotide_sugars=True,
+        fit_domain=domain,
     )
     time = np.arange(fid.size) * dwell
     fid += 0.18 * _linked_nucleotide_sugar(time, f0, config)
@@ -240,9 +243,11 @@ def test_anchor_phase_does_not_use_nad_window():
     )
 
 
-def test_anchor_informed_redox_fit_recovers_synthetic_ratio():
+@pytest.mark.parametrize("domain", ["real", "imag", "complex", "magnitude"])
+def test_anchor_informed_redox_fit_recovers_synthetic_ratio(domain):
     rng = np.random.default_rng(91)
     fid, dwell, f0, config = _synthetic_anchor_fid()
+    config = replace(config, fit_domain=domain)
     phased = _phase_fid(fid, dwell, f0, 28.0, -9.0)
     phased += 0.0005 * (
         rng.normal(size=phased.size) + 1j * rng.normal(size=phased.size)
@@ -256,7 +261,13 @@ def test_anchor_informed_redox_fit_recovers_synthetic_ratio():
         ),
     )
     assert result.fit.success
-    assert np.isclose(result.apparent_redox_ratio, 4.0, rtol=0.15)
+    if domain == "magnitude":
+        # Out-of-window peaks have coherent tails absent from the local model.
+        # Verify wrapper propagation, not exact recovery under model mismatch.
+        assert result.fit.metadata["fit_domain"] == "magnitude"
+        assert not result.fit.metadata["phase_estimated"]
+    else:
+        assert np.isclose(result.apparent_redox_ratio, 4.0, rtol=0.15)
     assert result.fit.metadata["phase_strategy"] == "non_NAD_anchor_informed"
 
 

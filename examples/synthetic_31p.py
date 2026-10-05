@@ -13,7 +13,8 @@ t = np.arange(n) * dwell
 
 
 def peak(ppm, decay_hz=8.0):
-    hz = ppm * f0
+    # PCr-centred convention: ppm = reference_ppm - frequency_hz / f0.
+    hz = -ppm * f0
     return np.exp(-np.pi * decay_hz * t) * np.exp(1j * 2 * np.pi * hz * t)
 
 basis = BasisSet(
