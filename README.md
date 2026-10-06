@@ -8,7 +8,7 @@ A central feature is ³¹P NAD-region/redox fitting, including field-dependent N
 
 LCMish runs with NumPy, SciPy and Matplotlib, without a proprietary fitting-software licence, MATLAB runtime or external fitting executable. MATLAB-prepared complex vectors, NIfTI-MRS and LCModel-style RAW are supported input routes. The numerical components are exposed so that models, baselines and fitting assumptions can be inspected and adapted.
 
-LCMish is independent of LCModel: it is not an official port or a drop-in numerical replacement. Research-software status is alpha. Development and validation have concentrated on ³¹P; native multinuclear support is not a claim of validated performance for every nucleus, sequence or high-resolution ¹H-MRSI acquisition.
+LCMish is independent of LCModel: it is not an official port or a drop-in numerical replacement. Research-software status is alpha. Development and validation have concentrated on ³¹P; native multinuclear support is not a claim of validated performance for every nucleus, sequence or acquisition.
 
 ## Core capabilities
 
